@@ -1,0 +1,21 @@
+export {
+  applyAbort,
+  applyMatchOutcome,
+  canStartMatch,
+  consumeLife,
+  createLocalStorageStore,
+  createMemoryStore,
+  defaultLives,
+  isPlayerDefeat,
+  loadLives,
+  localDateKey,
+  LIVES_STORAGE_KEY,
+  parseLives,
+  recordAbort,
+  recordMatchOutcome,
+  restoreLives,
+  saveLives,
+  shouldConsumeLifeOnAbort,
+  shouldRecordMatchOutcome,
+} from './lives.ts'
+export type { LivesState, StringStore } from './lives.ts'

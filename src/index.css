@@ -1,0 +1,61 @@
+:root {
+  --text: #b7c9d6;
+  --text-h: #e9f7ff;
+  --text-mute: #6d8494;
+  --bg: #05090e;
+  --bg-panel: rgba(7, 16, 24, 0.78);
+  --border: rgba(76, 231, 255, 0.28);
+  --cyan: #4ce7ff;
+  --cyan-soft: #9af3ff;
+  --cyan-dim: rgba(76, 231, 255, 0.16);
+  --cyan-glow: rgba(76, 231, 255, 0.42);
+  --font-ui: Rajdhani, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN',
+    Meiryo, sans-serif;
+  --font-display: Orbitron, Rajdhani, 'Segoe UI', 'Hiragino Sans',
+    'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+
+  font-family: var(--font-ui);
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--text);
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse 70% 42% at 50% -8%, rgba(32, 120, 160, 0.28), transparent 58%),
+    linear-gradient(118deg, transparent 6%, rgba(90, 230, 255, 0.07) 11%, transparent 16%),
+    linear-gradient(242deg, transparent 8%, rgba(90, 230, 255, 0.06) 13%, transparent 18%),
+    linear-gradient(180deg, #07131c 0%, #04080d 42%, #03070b 100%);
+  background-attachment: fixed;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-width: 320px;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}

@@ -1,0 +1,48 @@
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  min-height: 100vh;
+  padding: 3.2rem 1rem 2rem;
+  box-sizing: border-box;
+}
+
+.app-shell::before,
+.app-shell::after {
+  content: '';
+  pointer-events: none;
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 0;
+}
+
+.app-shell::before {
+  height: 32vh;
+  background:
+    linear-gradient(to top, rgba(4, 14, 20, 0.92), transparent 78%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 72px,
+      rgba(76, 231, 255, 0.045) 72px 73px
+    );
+}
+
+.app-shell::after {
+  height: 22vh;
+  background: radial-gradient(
+    ellipse 70% 80% at 50% 120%,
+    rgba(40, 190, 230, 0.16),
+    transparent 70%
+  );
+}
+
+.app-shell > * {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}

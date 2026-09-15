@@ -1,0 +1,66 @@
+.lives-hud {
+  position: fixed;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.38rem 0.7rem 0.38rem 0.62rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(6, 16, 24, 0.82);
+  color: var(--cyan-soft);
+  box-shadow: 0 0 14px rgba(76, 231, 255, 0.16);
+  pointer-events: none;
+}
+
+.lives-hud-label {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+}
+
+.lives-hud-pips {
+  display: flex;
+  align-items: center;
+  gap: 0.12rem;
+}
+
+.lives-pip {
+  display: flex;
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.lives-pip-icon {
+  width: 100%;
+  height: 100%;
+}
+
+.lives-pip-on {
+  color: #ff6b8a;
+  filter: drop-shadow(0 0 5px rgba(255, 92, 132, 0.55));
+}
+
+.lives-pip-off {
+  color: rgba(109, 132, 148, 0.38);
+}
+
+@media (max-width: 520px) {
+  .lives-hud {
+    top: 0.5rem;
+    left: 0.5rem;
+    padding: 0.34rem 0.55rem 0.34rem 0.48rem;
+    gap: 0.32rem;
+  }
+
+  .lives-hud-label {
+    font-size: 0.56rem;
+  }
+
+  .lives-pip {
+    width: 0.82rem;
+    height: 0.82rem;
+  }
+}

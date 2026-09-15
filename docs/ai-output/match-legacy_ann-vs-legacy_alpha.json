@@ -1,0 +1,22 @@
+{
+  "aId": "legacy_ann",
+  "bId": "legacy_alpha",
+  "games": 100,
+  "aWins": 37,
+  "bWins": 62,
+  "draws": 1,
+  "aScoreRate": 0.375,
+  "wilsonLow": 0.28639322617590174,
+  "wilsonHigh": 0.47285547569309877,
+  "pValue": 0.01543236450730929,
+  "significant": true,
+  "eloDiff": -88.73949984654253,
+  "avgStoneDiffForA": -23.86,
+  "endReasons": {
+    "no_legal_moves": 14,
+    "board_full": 86
+  },
+  "abnormal": 0,
+  "sprt": null,
+  "wallMs": 482293.8714
+}

@@ -1,0 +1,50 @@
+.bgm-toggle {
+  position: fixed;
+  top: 0.7rem;
+  right: 0.7rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.7rem 0.38rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(6, 16, 24, 0.82);
+  color: var(--cyan-soft);
+  box-shadow: 0 0 14px rgba(76, 231, 255, 0.16);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: filter 140ms ease, box-shadow 160ms ease;
+}
+
+.bgm-toggle:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 0 18px rgba(76, 231, 255, 0.28);
+}
+
+.bgm-toggle span {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+}
+
+.bgm-toggle-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.bgm-toggle:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 520px) {
+  .bgm-toggle {
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.34rem 0.55rem 0.34rem 0.42rem;
+  }
+
+  .bgm-toggle span {
+    font-size: 0.56rem;
+  }
+}

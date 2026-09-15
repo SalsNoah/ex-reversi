@@ -1,0 +1,22 @@
+{
+  "aId": "heur_mcts_1024",
+  "bId": "legacy_strategy",
+  "games": 60,
+  "aWins": 26,
+  "bWins": 32,
+  "draws": 2,
+  "aScoreRate": 0.45,
+  "wilsonLow": 0.33093453853760824,
+  "wilsonHigh": 0.575082854510185,
+  "pValue": 0.5118423084381793,
+  "significant": false,
+  "eloDiff": -34.86007028756008,
+  "avgStoneDiffForA": -15.333333333333334,
+  "endReasons": {
+    "board_full": 50,
+    "no_legal_moves": 10
+  },
+  "abnormal": 0,
+  "sprt": null,
+  "wallMs": 240949.2859
+}

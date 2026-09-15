@@ -1,0 +1,100 @@
+{
+  "playerIds": [
+    "legacy_alpha",
+    "legacy_ann",
+    "legacy_strategy"
+  ],
+  "series": [
+    {
+      "aId": "legacy_alpha",
+      "bId": "legacy_ann",
+      "games": 100,
+      "aWins": 51,
+      "bWins": 40,
+      "draws": 9,
+      "aScoreRate": 0.555,
+      "wilsonLow": 0.45735706084261607,
+      "wilsonHigh": 0.6485735103350239,
+      "pValue": 0.29446978456851114,
+      "significant": false,
+      "eloDiff": 38.3731888566979,
+      "avgStoneDiffForA": 21.48,
+      "endReasons": {
+        "no_legal_moves": 13,
+        "board_full": 87
+      },
+      "abnormal": 0,
+      "sprt": null,
+      "wallMs": 408030.4887
+    },
+    {
+      "aId": "legacy_alpha",
+      "bId": "legacy_strategy",
+      "games": 100,
+      "aWins": 48,
+      "bWins": 47,
+      "draws": 5,
+      "aScoreRate": 0.505,
+      "wilsonLow": 0.4086494852829769,
+      "wilsonHigh": 0.600980566642263,
+      "pValue": 0.9999999999999744,
+      "significant": false,
+      "eloDiff": 3.474471674037067,
+      "avgStoneDiffForA": 1.06,
+      "endReasons": {
+        "board_full": 98,
+        "no_legal_moves": 2
+      },
+      "abnormal": 0,
+      "sprt": null,
+      "wallMs": 435624.5523
+    },
+    {
+      "aId": "legacy_ann",
+      "bId": "legacy_strategy",
+      "games": 100,
+      "aWins": 40,
+      "bWins": 55,
+      "draws": 5,
+      "aScoreRate": 0.425,
+      "wilsonLow": 0.332652034162079,
+      "wilsonHigh": 0.5228971869593213,
+      "pValue": 0.15051806389022465,
+      "significant": false,
+      "eloDiff": -52.511565855727596,
+      "avgStoneDiffForA": -23.72,
+      "endReasons": {
+        "no_legal_moves": 15,
+        "board_full": 85
+      },
+      "abnormal": 0,
+      "sprt": null,
+      "wallMs": 444008.8302999999
+    }
+  ],
+  "elo": [
+    {
+      "id": "legacy_strategy",
+      "label": "既存 戦略AI（時間対応αβ）",
+      "elo": 16.25107694314682,
+      "scoreRate": 0.535,
+      "games": 200
+    },
+    {
+      "id": "legacy_alpha",
+      "label": "既存 アルファAI",
+      "elo": 13.929586876460833,
+      "scoreRate": 0.53,
+      "games": 200
+    },
+    {
+      "id": "legacy_ann",
+      "label": "アン（ゲーム登録版）",
+      "elo": -30.180663819607688,
+      "scoreRate": 0.435,
+      "games": 200
+    }
+  ],
+  "totalGames": 300,
+  "wallMs": 1287667.7695
+}

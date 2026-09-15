@@ -1,0 +1,17 @@
+[
+  {
+    "generation": 1,
+    "createdAt": "2026-09-15T09:05:19.988Z",
+    "samples": 6804,
+    "games": 40,
+    "policyLoss": 2.284824608077919,
+    "valueLoss": 0.7566471371281417,
+    "challengerScoreRate": 0,
+    "challengerElo": null,
+    "evalGames": 40,
+    "pValue": 1.8189894035458565e-12,
+    "sprt": "continue",
+    "accepted": false,
+    "note": "Champion 維持"
+  }
+]

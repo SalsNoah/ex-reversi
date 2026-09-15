@@ -1,0 +1,22 @@
+{
+  "aId": "mcts_heur_256",
+  "bId": "legacy_ga_g60",
+  "games": 60,
+  "aWins": 33,
+  "bWins": 27,
+  "draws": 0,
+  "aScoreRate": 0.55,
+  "wilsonLow": 0.42491714548981496,
+  "wilsonHigh": 0.6690654614623918,
+  "pValue": 0.5189580031896461,
+  "significant": false,
+  "eloDiff": 34.86007028756008,
+  "avgStoneDiffForA": -5.9,
+  "endReasons": {
+    "board_full": 50,
+    "no_legal_moves": 10
+  },
+  "abnormal": 0,
+  "sprt": null,
+  "wallMs": 19690.4165
+}
