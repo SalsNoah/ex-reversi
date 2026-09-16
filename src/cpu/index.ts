@@ -5,7 +5,7 @@ import {
 } from './gaMilestones.ts'
 import { maxFlipCpu } from './maxFlipCpu.ts'
 import { randomCpu } from './randomCpu.ts'
-import { alphaCpu, strategyCpu } from './strategy/index.ts'
+import { alphaCpu, betaCpu, strategyCpu } from './strategy/index.ts'
 import { waitCpu } from './waitCpu.ts'
 import type { CpuAgent, CpuTypeId } from './types.ts'
 
@@ -30,8 +30,12 @@ export { randomCpu } from './randomCpu.ts'
 export { waitCpu } from './waitCpu.ts'
 export {
   ALPHA_LEVEL,
+  BETA_LEVEL,
   MASTER_LEVEL,
   alphaCpu,
+  betaCpu,
+  createAlphaCpu,
+  createBetaCpu,
   createStrategyCpu,
   decideStrategyMove,
   strategyCpu,
@@ -46,6 +50,7 @@ for (const agent of gaMilestoneCpus) {
 const AGENTS: Record<string, CpuAgent> = {
   ann: annCpu,
   alpha: alphaCpu,
+  beta: betaCpu,
   strategy: strategyCpu,
   ga_best: gaBestCpu,
   random: randomCpu,
@@ -63,7 +68,8 @@ export function getCpuAgent(id: CpuTypeId): CpuAgent {
 }
 
 export const CPU_OPTIONS: ReadonlyArray<{ id: CpuTypeId; label: string }> = [
-  // 強さを裏取りできている構成を先頭＝既定の対戦相手にする
+  // 強さを裏取りできている最新の名前付き個体を先頭＝既定の対戦相手にする
+  { id: 'beta', label: betaCpu.label },
   { id: 'alpha', label: alphaCpu.label },
   { id: 'strategy', label: strategyCpu.label },
   { id: 'ann', label: annCpu.label },

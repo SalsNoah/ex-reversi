@@ -127,12 +127,36 @@ const ENDGAME: PhaseWeights = {
  * その石は二度と返らない＝全滅はありえないので、危険度は 0。
  * 確定石がないまま残り数個まで減った側だけを、石差とは別に強く嫌う。
  *
- * 境目（`survivalFloor`）と重みは差し替えられる。速い相手には
- * この境目が遅すぎて間に合わないことが分かっており、測り直している最中
- * （docs/strategy-ai.md「速い相手への弱点」）。
+ * 境目（`survivalFloor`）と重みは差し替えられる。速い相手にはこの境目が
+ * 遅すぎて間に合わないので、上げる案を測った。弱い相手（最速の `max_flip`）には
+ * 56.7%→86.7% と効くが、強い相手（GA 第100世代）には 100%→18.3% と崩れる。
+ * 石を減らして相手を手詰まりにする指し方を封じてしまうため。
+ * 差し替えの窓口だけ残してあり、既定は 6 枚未満（docs/strategy-ai.md「速い相手への穴」）。
  */
 const SURVIVAL_FLOOR = 6
 const SURVIVAL_WEIGHT = 300
+
+/**
+ * 全滅までの余裕。「相手の 1 手で返される自分の石の最大枚数」を実際に数え、
+ * 自分の石数との差を見る。差 0 なら**相手が今すぐ全滅させられる**。
+ *
+ * 上の `survivalRisk` は石数という代理指標で危険を測っている。石が少ないこと
+ * 自体は危険ではない（角に確定石が 1 つあれば石 2 枚でも安全）し、逆に
+ * 石が 10 枚あっても 1 か所で全部返るなら危ない。ここでは実際の形を見る。
+ *
+ * 石数の代理指標で測って対策した版は、弱い相手に効いて強い相手に崩れた
+ * （docs/strategy-ai.md「速い相手への穴」）。そこで指標を実物に替えた。
+ *
+ * 読みの地平線を 1 手ぶん伸ばすのが狙い。相手が自分より多く打てるこのゲームでは、
+ * 全滅は読み切れる手前で起きる。余裕 1〜2 枚も、相手がもう 1 手打てば 0 になるので嫌う。
+ */
+const WIPEOUT_MARGIN = 3
+const WIPEOUT_WEIGHT = 1_200
+/**
+ * ここまで石が減っている側だけ数える。
+ * 数える色については `scanLeaf` が打ち切れなくなるので、葉が重くなる。
+ */
+const WIPEOUT_SCAN_MAX = 10
 
 const TABLE_SIZE = CELLS_TOTAL - START_DISCS + 1
 
@@ -155,6 +179,7 @@ export type WeightTables = {
   parity: Float64Array
   survival: number
   survivalFloor: number
+  wipeout: number
 }
 
 export type WeightSpec = {
@@ -164,6 +189,8 @@ export type WeightSpec = {
   survival: number
   /** これより石が少ないと全滅の危険として嫌う。省略時は既定 */
   survivalFloor?: number
+  /** 相手の 1 手で全部返る形への罰。省略時は既定 */
+  wipeout?: number
 }
 
 const wCorner = new Float64Array(TABLE_SIZE)
@@ -177,6 +204,7 @@ const wDisc = new Float64Array(TABLE_SIZE)
 const wParity = new Float64Array(TABLE_SIZE)
 let wSurvival = 0
 let wSurvivalFloor = SURVIVAL_FLOOR
+let wWipeout = 0
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
@@ -210,6 +238,7 @@ export function buildWeightTables(spec: WeightSpec): WeightTables {
     parity: buildPhaseTable(spec, 'parity'),
     survival: spec.survival,
     survivalFloor: spec.survivalFloor ?? SURVIVAL_FLOOR,
+    wipeout: spec.wipeout ?? WIPEOUT_WEIGHT,
   }
 }
 
@@ -239,6 +268,7 @@ export function applyWeights(tables: WeightTables): void {
   wParity.set(tables.parity)
   wSurvival = tables.survival
   wSurvivalFloor = tables.survivalFloor
+  wWipeout = tables.wipeout
 }
 
 applyWeights(DEFAULT_WEIGHTS)
@@ -271,6 +301,13 @@ export type LeafScan = {
   /** 黒が将来打ちうる空きマス数＝白石に接する空き */
   blackPotential: number
   whitePotential: number
+  /**
+   * 白の 1 手で返される黒石の最大枚数。全滅の余裕を見るときだけ数える
+   * （石が `WIPEOUT_SCAN_MAX` 以下の側だけ）。数えていないときは 0。
+   */
+  maxBlackFlips: number
+  /** 黒の 1 手で返される白石の最大枚数 */
+  maxWhiteFlips: number
 }
 
 const scan: LeafScan = {
@@ -278,12 +315,19 @@ const scan: LeafScan = {
   whiteMobility: 0,
   blackPotential: 0,
   whitePotential: 0,
+  maxBlackFlips: 0,
+  maxWhiteFlips: 0,
 }
 
 /**
  * 空きマスを 1 周するだけで、双方の着手可能数と開放度をまとめて取る。
  * 葉での最大コストなので、方向ごとの走査は 1 回に抑え、
  * 全部わかった時点で打ち切る。
+ *
+ * 石が減っている側については「相手の 1 手で返される最大枚数」も一緒に数える。
+ * この走査は方向ごとに「同色の連なりとその先の色」をすでに見ているので、
+ * 数えるのに要るのは連なりの長さを足すことだけ。別の周回は増やさない。
+ * 代わりに、その色については打てると分かった時点で打ち切れなくなる。
  */
 export function scanLeaf(pos: FastPosition): LeafScan {
   const cells = pos.cells
@@ -294,6 +338,12 @@ export function scanLeaf(pos: FastPosition): LeafScan {
   let blackPotential = 0
   let whitePotential = 0
 
+  const countBlackFlips = wWipeout !== 0 && pos.black <= WIPEOUT_SCAN_MAX
+  const countWhiteFlips = wWipeout !== 0 && pos.white <= WIPEOUT_SCAN_MAX
+  const canStopEarly = !countBlackFlips && !countWhiteFlips
+  let maxBlackFlips = 0
+  let maxWhiteFlips = 0
+
   for (let i = next[EMPTY_HEAD]; i !== EMPTY_HEAD; i = next[i]) {
     // 石に接していないマスは、着手も開放度も生まない
     if (adjacent[i] === 0) continue
@@ -301,32 +351,56 @@ export function scanLeaf(pos: FastPosition): LeafScan {
     let legalWhite = false
     let touchesBlack = false
     let touchesWhite = false
+    let blackFlips = 0
+    let whiteFlips = 0
 
     for (let d = 0; d < 8; d += 1) {
       const dir = DIRS[d]
       const neighbor = cells[i + dir]
       if (neighbor === BLACK) {
         touchesBlack = true
-        if (!legalWhite) {
+        if (countBlackFlips) {
+          let j = i + dir
+          let run = 0
+          do {
+            run += 1
+            j += dir
+          } while (cells[j] === BLACK)
+          if (cells[j] === WHITE) {
+            legalWhite = true
+            blackFlips += run
+          }
+        } else if (!legalWhite) {
           let j = i + dir
           do {
             j += dir
           } while (cells[j] === BLACK)
           if (cells[j] === WHITE) {
             legalWhite = true
-            if (legalBlack) break
+            if (legalBlack && canStopEarly) break
           }
         }
       } else if (neighbor === WHITE) {
         touchesWhite = true
-        if (!legalBlack) {
+        if (countWhiteFlips) {
+          let j = i + dir
+          let run = 0
+          do {
+            run += 1
+            j += dir
+          } while (cells[j] === WHITE)
+          if (cells[j] === BLACK) {
+            legalBlack = true
+            whiteFlips += run
+          }
+        } else if (!legalBlack) {
           let j = i + dir
           do {
             j += dir
           } while (cells[j] === WHITE)
           if (cells[j] === BLACK) {
             legalBlack = true
-            if (legalWhite) break
+            if (legalWhite && canStopEarly) break
           }
         }
       }
@@ -343,12 +417,16 @@ export function scanLeaf(pos: FastPosition): LeafScan {
     }
     if (touchesWhite) blackPotential += 1
     if (touchesBlack) whitePotential += 1
+    if (blackFlips > maxBlackFlips) maxBlackFlips = blackFlips
+    if (whiteFlips > maxWhiteFlips) maxWhiteFlips = whiteFlips
   }
 
   scan.blackMobility = blackMobility
   scan.whiteMobility = whiteMobility
   scan.blackPotential = blackPotential
   scan.whitePotential = whitePotential
+  scan.maxBlackFlips = maxBlackFlips
+  scan.maxWhiteFlips = maxWhiteFlips
   return scan
 }
 
@@ -359,6 +437,23 @@ const DISC_SCALE = 1000
 function survivalRisk(discs: number, stable: number): number {
   if (stable > 0 || discs >= wSurvivalFloor) return 0
   const gap = wSurvivalFloor - discs
+  return gap * gap
+}
+
+/**
+ * 全滅までの余裕が小さい形への危険度。石数ではなく実際の反転で測る。
+ * `maxFlips` は `scanLeaf` が数えた「相手の 1 手で返される最大枚数」。
+ * 確定石が 1 つでもあればその石は返らないので、全滅はありえず 0。
+ */
+function wipeoutRisk(
+  discs: number,
+  stable: number,
+  maxFlips: number,
+): number {
+  if (wWipeout === 0 || stable > 0 || discs > WIPEOUT_SCAN_MAX) return 0
+  const margin = discs - maxFlips
+  if (margin >= WIPEOUT_MARGIN) return 0
+  const gap = WIPEOUT_MARGIN - margin
   return gap * gap
 }
 
@@ -459,6 +554,11 @@ function evaluateFromScan(
   const discDiff = myDiscs - oppDiscs
   const survivalTerm =
     survivalRisk(oppDiscs, oppStable) - survivalRisk(myDiscs, myStable)
+  const myFlips = black ? leaf.maxBlackFlips : leaf.maxWhiteFlips
+  const oppFlips = black ? leaf.maxWhiteFlips : leaf.maxBlackFlips
+  const wipeoutTerm =
+    wipeoutRisk(oppDiscs, oppStable, oppFlips) -
+    wipeoutRisk(myDiscs, myStable, myFlips)
 
   // 空きが奇数で自分の手番なら最後の 1 手を取りやすい
   const parity = ((pos.emptyCount & 1) === 1) === selfTurn ? 1 : -1
@@ -473,7 +573,8 @@ function evaluateFromScan(
     wEdge[slot] * edgeDiff +
     wDisc[slot] * discDiff +
     wParity[slot] * parity +
-    wSurvival * survivalTerm
+    wSurvival * survivalTerm +
+    wWipeout * wipeoutTerm
 
   return Math.round(score)
 }

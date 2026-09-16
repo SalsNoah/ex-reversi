@@ -12,6 +12,7 @@ export type CpuTypeId =
   | 'max_flip'
   | 'ann'
   | 'alpha'
+  | 'beta'
   | 'strategy'
   | 'ga_best'
   | 'wait'

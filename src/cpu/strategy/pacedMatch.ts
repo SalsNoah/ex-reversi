@@ -21,6 +21,7 @@ import {
   tickThinkGate,
 } from '../thinkGate.ts'
 import type { CpuAgent } from '../types.ts'
+import type { Board } from '../../game/types.ts'
 
 /** 次に着手を求められるまでのゲーム内ミリ秒（セッションと同じ数え方） */
 function untilDecisionMs(
@@ -66,6 +67,15 @@ export function runPacedMatch(options: {
   white: CpuAgent
   blackThinkDelayMs: number
   whiteThinkDelayMs?: number
+  /**
+   * 1 ステップごとに、進める前の盤とそのステップで置かれた手を渡す。
+   * 見るだけで試合には影響しない（負け方を調べるための窓口）。
+   */
+  observe?: (step: {
+    board: Board
+    black?: { row: number; col: number }
+    white?: { row: number; col: number }
+  }) => void
 }): PacedMatchResult {
   const whiteThinkDelayMs =
     options.whiteThinkDelayMs ?? GAME_CONFIG.cpuThinkDelayMs
@@ -177,6 +187,7 @@ export function runPacedMatch(options: {
       }
     }
 
+    options.observe?.({ board: state.board, black: blackMove, white: whiteMove })
     state = stepMatch(state, { black: blackMove, white: whiteMove }).state
     steps += 1
   }

@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { TitleScreen } from './TitleScreen.tsx'
 
 describe('TitleScreen', () => {
-  it('試作設定を出さない', () => {
+  it('ベータを先頭の選択肢として出せる', () => {
     const html = renderToStaticMarkup(
-      <TitleScreen initialCpuType="random" canStart onStart={() => {}} />,
+      <TitleScreen initialCpuType="beta" canStart onStart={() => {}} />,
     )
-    expect(html).not.toContain('試作設定')
-    expect(html).not.toContain('着手後の待ち時間')
-    expect(html).toContain('CPUの選択')
-    expect(html).toContain('開始')
+    expect(html).toContain('ベータ')
+    expect(html).toContain('アルファ')
+    expect(html).toContain('value="beta"')
+    expect(html).toContain('checked')
   })
 
   it('15世代から5世代ごとのGA育成を出せる', () => {

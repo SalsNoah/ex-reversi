@@ -116,6 +116,10 @@ function mark(cells: Uint8Array, index: number): void {
 /**
  * 辺のマスは縦・斜めが必ず盤外で閉じるので、辺方向だけ見れば確定かが決まる。
  * 「辺が全部埋まっている」か「占有された角から同色が続いている」なら確定。
+ *
+ * これは十分条件で、取りこぼしはある（3^10 通りの 25% で確定が増える）。
+ * 厳密に数える表を作って差し替えたが、**アルファの手は 481 局面で 1 つも変わらず**、
+ * 辺の走査だけ 1.8 倍重くなったので入れていない（docs/strategy-ai.md）。
  */
 function markEdgeLine(cells: Uint8Array, line: Int32Array): void {
   let full = true

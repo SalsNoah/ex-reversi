@@ -35,7 +35,9 @@ import {
   applyWeights,
   buildWeightTables,
   evaluateLeaf,
+  scanLeaf,
   terminalScore,
+  type WeightTables,
 } from './evaluate.ts'
 import {
   createPonderSession,
@@ -53,6 +55,7 @@ import {
   strategyCpu,
 } from './strategyCpu.ts'
 import { ALPHA_LEVEL, ALPHA_WEIGHT_SPEC, alphaCpu } from './alphaCpu.ts'
+import { BETA_LEVEL, BETA_WEIGHT_SPEC, betaCpu } from './betaCpu.ts'
 import { DEFAULT_WEIGHT_SPEC } from './evaluate.ts'
 import { runPacedMatch } from './pacedMatch.ts'
 import { CPU_OPTIONS, getCpuAgent } from '../index.ts'
@@ -292,6 +295,21 @@ describe('戦略AI 確定石', () => {
     expect(countStable(pos).black).toBe(0)
   })
 
+  it('角に触れていない辺の石は、実際は返らなくても確定に数えない', () => {
+    // . W B B B B B B W .
+    // 内側 6 枚の黒は、両端の空きにどちらの色がいつ来ても二度と返らない。
+    // つまりこれは取りこぼしだが、埋めてもアルファの手は 1 つも変わらず
+    // 辺の走査だけ重くなったので、近似のままにしてある（docs/strategy-ai.md）
+    const board = createEmptyBoard()
+    board[0][1] = 'white'
+    for (let col = 2; col <= 7; col += 1) board[0][col] = 'black'
+    board[0][8] = 'white'
+    const pos = createFastPosition()
+    loadBoard(pos, board)
+
+    expect(countStable(pos).black).toBe(0)
+  })
+
   it('確定と数えた石は、そこからの合法手ひとつでは返らない', () => {
     const pos = createFastPosition()
     const buffer = new Int32Array(96)
@@ -374,6 +392,124 @@ describe('戦略AI 評価', () => {
     applyWeights(DEFAULT_WEIGHTS)
 
     expect(byDefault - withHigherFloor).toBeGreaterThan(3_000)
+  })
+
+  it('相手の 1 手で全部返る形を、同じ石数でも別格に嫌う', () => {
+    // 白 3 枚は同じ。違うのは「1 手で 3 枚とも返るか」だけ。
+    // 石数を代理指標にした項（survival）ではこの 2 つを区別できない
+    const blackBlock = (): Board => {
+      const board = createEmptyBoard()
+      for (let row = 2; row <= 7; row += 1) {
+        for (let col = 2; col <= 7; col += 1) board[row][col] = 'black'
+      }
+      return board
+    }
+    // 白 3 枚が一列に並び、右端が黒・左隣が空き。黒がそこへ置けば 3 枚とも返る
+    const wipeable = blackBlock()
+    wipeable[4][2] = null
+    wipeable[4][3] = 'white'
+    wipeable[4][4] = 'white'
+    wipeable[4][5] = 'white'
+    // 白 3 枚がばらけていて、どの 1 手でも全部は返らない
+    const scattered = blackBlock()
+    scattered[3][3] = 'white'
+    scattered[5][5] = 'white'
+    scattered[6][3] = 'white'
+
+    const withoutTerm = buildWeightTables({
+      ...DEFAULT_WEIGHT_SPEC,
+      wipeout: 0,
+    })
+    const scoreFor = (board: Board, tables: WeightTables): number => {
+      const pos = createFastPosition()
+      loadBoard(pos, board)
+      expect(pos.white).toBe(3)
+      expect(countStable(pos).white).toBe(0)
+      applyWeights(tables)
+      const score = evaluateLeaf(pos, WHITE, true)
+      applyWeights(DEFAULT_WEIGHTS)
+      return score
+    }
+
+    // 1 手で全部返る形は、この項があるぶんだけ大きく下がる
+    const wipeableDrop =
+      scoreFor(wipeable, withoutTerm) - scoreFor(wipeable, DEFAULT_WEIGHTS)
+    expect(wipeableDrop).toBeGreaterThan(9_000)
+
+    // ばらけている方は同じ石数でも下がらない
+    const scatteredDrop =
+      scoreFor(scattered, withoutTerm) - scoreFor(scattered, DEFAULT_WEIGHTS)
+    expect(scatteredDrop).toBe(0)
+  })
+
+  it('返される最大枚数は、空きマスを全部試した答えと一致する', () => {
+    // 本番は着手可能数・開放度と同じ 1 周で数えていて、数える色については
+    // 「打てると分かった時点で打ち切る」をやめている。切り忘れると数が足りなくなる
+    const bruteForce = (pos: ReturnType<typeof createFastPosition>): number => {
+      const { cells, emptyNext } = pos
+      let best = 0
+      for (let i = emptyNext[EMPTY_HEAD]; i !== EMPTY_HEAD; i = emptyNext[i]) {
+        let total = 0
+        for (let d = 0; d < 8; d += 1) {
+          const dir = DIRS[d]
+          let j = i + dir
+          let run = 0
+          while (cells[j] === WHITE) {
+            run += 1
+            j += dir
+          }
+          if (run !== 0 && cells[j] === BLACK) total += run
+        }
+        if (total > best) best = total
+      }
+      return best
+    }
+
+    // 合法な進行だけだと白が数枚まで減る形がめったに出ないので、盤を直に作る。
+    // 数えるのは盤の形だけを見る計算なので、並びが合法でなくても照合になる
+    const rng = createRng(20260915)
+    const pos = createFastPosition()
+    let checked = 0
+    const seenMargins = new Set<number>()
+    for (let trial = 0; trial < 400; trial += 1) {
+      const board = createEmptyBoard()
+      const whites = rng.nextInt(1, 11)
+      for (let row = 0; row < 10; row += 1) {
+        for (let col = 0; col < 10; col += 1) {
+          board[row][col] = rng.nextInt(0, 3) === 0 ? null : 'black'
+        }
+      }
+      for (let k = 0; k < whites; k += 1) {
+        board[rng.nextInt(0, 10)][rng.nextInt(0, 10)] = 'white'
+      }
+      loadBoard(pos, board)
+      if (pos.white === 0) continue
+      checked += 1
+      const flips = scanLeaf(pos).maxWhiteFlips
+      expect(flips).toBe(bruteForce(pos))
+      seenMargins.add(Math.min(Math.max(pos.white - flips, 0), 3))
+    }
+
+    expect(checked).toBeGreaterThan(300)
+    // 「どれも危険でないので 0 枚で一致」では照合にならない。全滅する形も出す
+    expect([...seenMargins].sort()).toEqual([0, 1, 2, 3])
+  })
+
+  it('石が多い側は数えない（葉を重くしないため）', () => {
+    // 数えると scanLeaf が打ち切れなくなるので、減っている側だけに限っている
+    const board = createInitialBoard()
+    const pos = createFastPosition()
+    loadBoard(pos, board)
+    expect(pos.black).toBe(8)
+    expect(scanLeaf(pos).maxBlackFlips).toBeGreaterThan(0)
+
+    const crowded = playout(4242, 40)
+    loadBoard(pos, crowded)
+    expect(pos.black).toBeGreaterThan(10)
+    expect(pos.white).toBeGreaterThan(10)
+    const leaf = scanLeaf(pos)
+    expect(leaf.maxBlackFlips).toBe(0)
+    expect(leaf.maxWhiteFlips).toBe(0)
   })
 
   it('確定石があるなら石が少なくても全滅としては嫌わない', () => {
@@ -710,24 +846,26 @@ describe('戦略AI 相手ペースの観測', () => {
     expect(estimate.measured).toBe(false)
   })
 
-  it('測った間隔に応じて評価の重みを選べる', () => {
+  it('測ったペースに応じて評価の重みを選べる', () => {
     // 速い相手には別の評価を使いたくなったとき用の窓口。既定では使っていない
-    const seen: number[] = []
+    const seen: Array<{ intervalMs: number; measured: boolean }> = []
     const agent = createStrategyCpu({
       id: 'strategy',
       label: 'pace-weights',
       level: {
         ...ALPHA_LEVEL,
         nodeBudget: 600,
-        weightsForPace: (intervalMs) => {
-          seen.push(intervalMs)
+        weightsForPace: (pace) => {
+          seen.push({ intervalMs: pace.intervalMs, measured: pace.measured })
           return ALPHA_LEVEL.weights
         },
       },
     })
     agent.decide(publicStateFor(createInitialBoard()), createRng(5), 'white')
-    // 観測前は初期想定のまま呼ばれる
-    expect(seen).toEqual([ALPHA_LEVEL.opponentIntervalMs])
+    // 観測前は初期想定のまま。measured で試合の切れ目が分かる
+    expect(seen).toEqual([
+      { intervalMs: ALPHA_LEVEL.opponentIntervalMs, measured: false },
+    ])
   })
 
   it('試合が変わったら測り直す', () => {
@@ -890,14 +1028,14 @@ describe('相手の速さを変えた対戦', () => {
 })
 
 describe('アルファ', () => {
-  it('開始画面の先頭に並び、既定の対戦相手になる', () => {
-    expect(CPU_OPTIONS[0]).toEqual({ id: 'alpha', label: 'アルファ' })
+  it('開始画面に残り、23時の設定で固定する', () => {
+    expect(CPU_OPTIONS.map((o) => o.id)).toContain('alpha')
     expect(getCpuAgent('alpha')).toBe(alphaCpu)
-    expect(createTitleSession().settings.cpuType).toBe('alpha')
+    expect(createTitleSession().settings.cpuType).not.toBe('alpha')
   })
 
   it('強さを裏取りできている設定で固定する', () => {
-    // 変えるときは実測を docs/strategy-ai.md に残してから
+    // 変えるときは実測を docs/strategy-ai.md に残してから、新しい名前で載せる
     expect(ALPHA_LEVEL.nodeBudget).toBe(14_000)
     expect(ALPHA_LEVEL.adaptPace).toBe(true)
     // 手番前の下読みは対戦で負け越したので入れない
@@ -908,6 +1046,18 @@ describe('アルファ', () => {
         DEFAULT_WEIGHT_SPEC[phase].mobility * 1.5,
       )
     }
+    // 23時時点では全滅の余裕を見ていない
+    expect(ALPHA_WEIGHT_SPEC.wipeout).toBe(0)
+    expect(ALPHA_LEVEL.weights.wipeout).toBe(0)
+  })
+
+  it('相手の速さで評価を変えない', () => {
+    // 相手が速いほど全滅回避の境目を上げる案を試した。最速の max_flip には
+    // 56.7%→85.0% と効くが、同じ速さの GA 第100世代に 100%→18.3% と崩れる。
+    // 石を減らして相手を手詰まりにする指し方は、相手が強いほど効くため。
+    // 差し替えの窓口（weightsForPace）は残してあるが、アルファでは使わない
+    expect(ALPHA_LEVEL.weightsForPace).toBeUndefined()
+    expect(ALPHA_LEVEL.weights.survivalFloor).toBe(DEFAULT_WEIGHTS.survivalFloor)
   })
 
   it('打てるときは必ず合法手を返し、待機しない', () => {
@@ -991,5 +1141,71 @@ describe('アルファ', () => {
     expect(
       strategyCpu.decide(publicStateFor(blocked), createRng(1), 'white'),
     ).toEqual({ type: 'wait' })
+  })
+})
+
+describe('ベータ', () => {
+  it('開始画面の先頭に並び、既定の対戦相手になる', () => {
+    expect(CPU_OPTIONS[0]).toEqual({ id: 'beta', label: 'ベータ' })
+    expect(CPU_OPTIONS[1]).toEqual({ id: 'alpha', label: 'アルファ' })
+    expect(getCpuAgent('beta')).toBe(betaCpu)
+    expect(createTitleSession().settings.cpuType).toBe('beta')
+  })
+
+  it('アルファに足した全滅の余裕を固定する', () => {
+    expect(BETA_LEVEL.nodeBudget).toBe(ALPHA_LEVEL.nodeBudget)
+    expect(BETA_LEVEL.ponderStepNodes).toBe(0)
+    expect(BETA_LEVEL.adaptPace).toBe(true)
+    expect(BETA_LEVEL.weightsForPace).toBeUndefined()
+    for (const phase of ['opening', 'midgame', 'endgame'] as const) {
+      expect(BETA_WEIGHT_SPEC[phase].mobility).toBeCloseTo(
+        ALPHA_WEIGHT_SPEC[phase].mobility,
+      )
+    }
+    expect(BETA_WEIGHT_SPEC.wipeout).toBe(1_200)
+    expect(BETA_LEVEL.weights.wipeout).toBe(1_200)
+  })
+
+  it('アルファより、1手で全滅する形を嫌う', () => {
+    // 白 3 枚が一列。黒が左隣へ置けば 3 枚とも返る
+    const board = createEmptyBoard()
+    for (let row = 2; row <= 7; row += 1) {
+      for (let col = 2; col <= 7; col += 1) board[row][col] = 'black'
+    }
+    board[4][2] = null
+    board[4][3] = 'white'
+    board[4][4] = 'white'
+    board[4][5] = 'white'
+
+    const pos = createFastPosition()
+    loadBoard(pos, board)
+    expect(pos.white).toBe(3)
+    expect(countStable(pos).white).toBe(0)
+
+    applyWeights(ALPHA_LEVEL.weights)
+    const alphaScore = evaluateLeaf(pos, WHITE, true)
+    applyWeights(BETA_LEVEL.weights)
+    const betaScore = evaluateLeaf(pos, WHITE, true)
+    applyWeights(DEFAULT_WEIGHTS)
+
+    expect(alphaScore - betaScore).toBeGreaterThan(9_000)
+  })
+
+  it('打てるときは必ず合法手を返し、待機しない', () => {
+    for (const plies of [0, 15, 33, 58, 80]) {
+      const board = playout(6100 + plies, plies)
+      const legal = listLegalMoves(board, 'white')
+      if (legal.length === 0) continue
+      const decision = betaCpu.decide(
+        publicStateFor(board),
+        createRng(plies),
+        'white',
+      )
+      expect(decision.type).toBe('move')
+      if (decision.type !== 'move') continue
+      expect(
+        legal.some((m) => m.row === decision.row && m.col === decision.col),
+      ).toBe(true)
+    }
   })
 })

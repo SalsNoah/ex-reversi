@@ -121,7 +121,7 @@ export function createTitleSession(
     settings: {
       seed: settings?.seed ?? 1,
       cooldownMs: settings?.cooldownMs ?? GAME_CONFIG.cooldownMs,
-      cpuType: settings?.cpuType ?? 'alpha',
+      cpuType: settings?.cpuType ?? 'beta',
     },
     match: null,
     countdownRemainingMs: 0,

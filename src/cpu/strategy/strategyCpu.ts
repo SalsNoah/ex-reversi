@@ -52,13 +52,15 @@ export type StrategyLevel = {
   /** 評価の重み。調整や各項の効き方を測るときだけ差し替える */
   weights: WeightTables
   /**
-   * 相手の着手間隔の推定から重みを選ぶ。省略すると `weights` を常に使う。
+   * 相手の着手ペースの推定から重みを選ぶ。省略すると `weights` を常に使う。
    *
    * 相手が自分より速いと、相手は「打つ手がなくて損な手を打たされる」状況に陥らない。
    * 着手可能数を削って相手を追い込む読みはこの仕組みに乗っているので、
    * 速い相手には効かない（docs/strategy-ai.md）。速さに応じて評価を変えるための窓口。
+   *
+   * `measured` が false の間は観測前（試合の最初の 2 手）。試合の切れ目はここで分かる。
    */
-  weightsForPace?: (intervalMs: number) => WeightTables
+  weightsForPace?: (pace: PaceEstimate) => WeightTables
 }
 
 /**
@@ -226,10 +228,7 @@ export function createStrategyCpu(options: {
   const session = createPonderSession()
 
   const levelWith = (pace: PaceEstimate): StrategyLevel => {
-    const intervalMs = level.adaptPace
-      ? pace.intervalMs
-      : level.opponentIntervalMs
-    const weights = level.weightsForPace?.(intervalMs) ?? level.weights
+    const weights = level.weightsForPace?.(pace) ?? level.weights
     if (!level.adaptPace) {
       return weights === level.weights ? level : { ...level, weights }
     }

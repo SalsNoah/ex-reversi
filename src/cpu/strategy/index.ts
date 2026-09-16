@@ -6,7 +6,8 @@ export {
   strategyCpu,
   type StrategyLevel,
 } from './strategyCpu.ts'
-export { ALPHA_LEVEL, alphaCpu } from './alphaCpu.ts'
+export { ALPHA_LEVEL, alphaCpu, createAlphaCpu } from './alphaCpu.ts'
+export { BETA_LEVEL, betaCpu, createBetaCpu } from './betaCpu.ts'
 export { evaluate, evaluateDetailed, terminalScore } from './evaluate.ts'
 export { countStable } from './stability.ts'
 export {

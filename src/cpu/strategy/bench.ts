@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 戦略AIの検証用 CLI（画面なし）。
  *
  *   tsx src/cpu/strategy/bench.ts verify      … ルール層との一致確認
@@ -22,6 +22,7 @@ import type { Board, Stone } from '../../game/types.ts'
 import { GA_MILESTONES } from '../gaMilestones.ts'
 import { getCpuAgent } from '../index.ts'
 import { matchSeeds, runGaMatch, type OpponentSpec } from '../../ga/matchRunner.ts'
+import type { PaceEstimate } from './pace.ts'
 import {
   BLACK,
   EMPTY_HEAD,
@@ -41,15 +42,18 @@ import {
   decideStrategyMove,
   type StrategyLevel,
 } from './strategyCpu.ts'
-import { ALPHA_LEVEL, ALPHA_WEIGHT_SPEC } from './alphaCpu.ts'
+import { ALPHA_LEVEL, ALPHA_WEIGHT_SPEC, createAlphaCpu } from './alphaCpu.ts'
+import { BETA_LEVEL, createBetaCpu } from './betaCpu.ts'
 import { runPacedMatch } from './pacedMatch.ts'
 import {
+  DEFAULT_WEIGHTS,
   DEFAULT_WEIGHT_SPEC,
   buildWeightTables,
   evaluate,
   scanLeaf,
   type PhaseWeights,
   type WeightSpec,
+  type WeightTables,
 } from './evaluate.ts'
 import { countStable } from './stability.ts'
 import type { CpuAgent } from '../types.ts'
@@ -142,8 +146,21 @@ function verify(): void {
 }
 
 function speed(args: string[]): void {
-  const budget = Number(args[0] ?? MASTER_LEVEL.nodeBudget)
-  const level = { ...MASTER_LEVEL, nodeBudget: budget }
+  const argv = [...args]
+  // 全滅の余裕を見る項の重み。0 で切って所要を比べられるようにしてある
+  const wipeout = takeArg(argv, '--wipeout')
+  const budget = Number(argv[0] ?? MASTER_LEVEL.nodeBudget)
+  const level = {
+    ...MASTER_LEVEL,
+    nodeBudget: budget,
+    weights:
+      wipeout === undefined
+        ? MASTER_LEVEL.weights
+        : buildWeightTables({
+            ...DEFAULT_WEIGHT_SPEC,
+            wipeout: Number(wipeout),
+          }),
+  }
   const samples: Array<{
     ms: number
     nodes: number
@@ -226,21 +243,21 @@ function speed(args: string[]): void {
 }
 
 /**
- * 対戦に出す自分側。既定は画面に登録した「アルファ」そのもの。
+ * 対戦に出す自分側。既定は画面に登録した最新の名前付き個体「ベータ」。
  * つまみを渡したときだけ、その設定の使い捨てエージェントを作る。
  */
 function strategySpec(
   level?: Partial<StrategyLevel>,
 ): OpponentSpec & { labelId: string } {
-  if (!level) return { kind: 'builtin', id: 'alpha', labelId: 'alpha' }
+  if (!level) return { kind: 'builtin', id: 'beta', labelId: 'beta' }
   return {
     kind: 'agent',
-    id: 'alpha',
-    labelId: 'alpha',
+    id: 'beta',
+    labelId: 'beta',
     agent: createStrategyCpu({
-      id: 'alpha',
-      label: 'alpha',
-      level: { ...ALPHA_LEVEL, ...level },
+      id: 'beta',
+      label: 'beta',
+      level: { ...BETA_LEVEL, ...level },
     }),
   }
 }
@@ -273,22 +290,24 @@ function match(args: string[]): void {
   // 相手の着手間隔の想定を変えて測るためのつまみ（既定は MASTER_LEVEL のまま）
   const oppInterval = takeArg(argv, '--opp-interval')
   const oppReaction = takeArg(argv, '--opp-reaction')
-  // 全滅回避の境目を変えて測るためのつまみ
+  // 全滅回避の境目・全滅の余裕の重みを変えて測るためのつまみ
   const floor = takeArg(argv, '--survival-floor')
   const survival = takeArg(argv, '--survival')
+  const wipeout = takeArg(argv, '--wipeout')
   // 指定したときは実測追従を切り、その想定だけで読ませる
   const levelOverride =
-    oppInterval || oppReaction || floor || survival
+    oppInterval || oppReaction || floor || survival || wipeout
       ? {
           ...(oppInterval || oppReaction ? { adaptPace: false } : {}),
           ...(oppInterval ? { opponentIntervalMs: Number(oppInterval) } : {}),
           ...(oppReaction ? { opponentReactionMs: Number(oppReaction) } : {}),
-          ...(floor || survival
+          ...(floor || survival || wipeout
             ? {
                 weights: buildWeightTables({
                   ...ALPHA_WEIGHT_SPEC,
                   ...(floor ? { survivalFloor: Number(floor) } : {}),
                   ...(survival ? { survival: Number(survival) } : {}),
+                  ...(wipeout ? { wipeout: Number(wipeout) } : {}),
                 }),
               }
             : {}),
@@ -521,6 +540,11 @@ function duel(
   }
   return { win, loss, draw, diff: diffSum / games }
 }
+
+/** 既定の全滅回避。石 1 枚での罰則は (6-1)^2 * 300 = 7500 */
+const BASE_SURVIVAL_FLOOR = DEFAULT_WEIGHTS.survivalFloor
+const BASE_SURVIVAL_PENALTY =
+  (BASE_SURVIVAL_FLOOR - 1) ** 2 * DEFAULT_WEIGHT_SPEC.survival
 
 type TunableTerm = keyof PhaseWeights | 'survival'
 
@@ -878,40 +902,68 @@ function ponderBench(args: string[]): void {
  * `getCpuAgent` は同じ実体を返すため、そのまま両側に置くと推定が混ざる。
  */
 function freshAgent(id: string): CpuAgent {
-  if (id === 'alpha') {
-    return createStrategyCpu({ id: 'alpha', label: 'アルファ', level: ALPHA_LEVEL })
-  }
+  if (id === 'beta') return createBetaCpu()
+  if (id === 'alpha') return createAlphaCpu()
   if (id === 'strategy') {
     return createStrategyCpu({ id: 'strategy', label: '戦略AI', level: MASTER_LEVEL })
   }
-  // 相手が速いほど全滅回避の境目を上げる版。
-  // 境目 14 は速い相手に効くが、同速の強い相手には致命傷（直接対戦 0勝60敗）。
-  // 相手が多く打てるほど石を減らす危険が増えるので、段階的に効かせる。
-  // どの段も石 1 枚での罰則が約 7500 になるよう重みを合わせてある。
-  if (id === 'alphaadapt') {
-    const steps: Array<[maxIntervalMs: number, floor: number, weight: number]> =
-      [
-        [750, 14, 45],
-        [900, 12, 62],
-        [1050, 10, 90],
-        [1150, 8, 150],
-        [Number.POSITIVE_INFINITY, 6, 300],
-      ]
-    const tables = steps.map(([maxIntervalMs, floor, weight]) => ({
-      maxIntervalMs,
-      weights: buildWeightTables({
+  // 相手が速いほど全滅回避の境目を上げる版。alpharatio-<最速時の境目>
+  //
+  // 「相手が自分の何倍打てるか」の連続関数で境目を 6→上限 まで動かす。
+  // 同速以下なら比は 1 以下＝境目 6 ＝アルファと完全に同じ。
+  // 石 1 枚での罰則はどの比でも約 7500 になるよう重みを合わせる。
+  //
+  // **アルファには入れていない。** 最速の max_flip には 56.7%→85.0% と効くが、
+  // 同じ速さの GA 第100世代に 100%→18.3% と崩れる（docs/strategy-ai.md）。
+  // 残してあるのは、次に別の形を試すときの比較の基準にするため。
+  if (id.startsWith('alpharatio')) {
+    const maxFloor = Number(id.split('-')[1] ?? 14)
+    const selfIntervalMs = GAME_CONFIG.cooldownMs + GAME_CONFIG.cpuThinkDelayMs
+    const maxRatio = selfIntervalMs / GAME_CONFIG.cooldownMs
+    const cache = new Map<number, WeightTables>()
+    // 推定間隔は試合が進むと上に流れる（相手が打てない時間も分母の時間に入るため）。
+    // 相手の「速さ」としては最も速かったときの値を使う。遅くなったように見えても、
+    // 相手がその速さで打てること自体は変わらない。
+    //
+    // 測る前は「相手は最速」と見る。全滅させられるのは序盤の数手なので、
+    // 観測が溜まるのを待つと間に合わない（実測: 初期想定だけ直しても効かない）。
+    // 取り違えたときの損は非対称で、遅い相手を速いと見ても数手ぶん慎重になるだけ。
+    let fastestMs: number | null = null
+    const weightsFor = (pace: PaceEstimate): WeightTables => {
+      if (!pace.measured) fastestMs = null
+      else if (fastestMs === null) fastestMs = pace.intervalMs
+      else fastestMs = Math.min(fastestMs, pace.intervalMs)
+      // 未観測の間だけ最速と見る。観測が入ったらそちらに従う
+      const intervalMs = fastestMs ?? GAME_CONFIG.cooldownMs
+      const cached = cache.get(intervalMs)
+      if (cached) return cached
+      const ratio = selfIntervalMs / Math.max(1, intervalMs)
+      const t = Math.min(1, Math.max(0, (ratio - 1) / (maxRatio - 1)))
+      const survivalFloor =
+        BASE_SURVIVAL_FLOOR + (maxFloor - BASE_SURVIVAL_FLOOR) * t
+      const built = buildWeightTables({
         ...ALPHA_WEIGHT_SPEC,
-        survivalFloor: floor,
-        survival: weight,
-      }),
-    }))
+        survivalFloor,
+        survival: BASE_SURVIVAL_PENALTY / (survivalFloor - 1) ** 2,
+      })
+      cache.set(intervalMs, built)
+      return built
+    }
     return createStrategyCpu({
       id: 'alpha',
-      label: 'アルファ(速さで全滅回避の境目を変える)',
+      label: `アルファ(最速時の比で境目 6→${maxFloor})`,
+      level: { ...ALPHA_LEVEL, weightsForPace: weightsFor },
+    })
+  }
+  // 全滅までの余裕を見る項の重みを変えた版。alphawipe-<重み>。0 で切る
+  if (id.startsWith('alphawipe-')) {
+    const weight = Number(id.split('-')[1])
+    return createStrategyCpu({
+      id: 'alpha',
+      label: weight === 0 ? 'アルファ(全滅の余裕なし)' : `アルファ(全滅の余裕×${weight})`,
       level: {
         ...ALPHA_LEVEL,
-        weightsForPace: (intervalMs) =>
-          tables.find((t) => intervalMs <= t.maxIntervalMs)!.weights,
+        weights: buildWeightTables({ ...ALPHA_WEIGHT_SPEC, wipeout: weight }),
       },
     })
   }
@@ -945,8 +997,8 @@ function freshAgent(id: string): CpuAgent {
       label: `アルファ(${thresholdMs}ms未満なら着手可能数×${factor})`,
       level: {
         ...ALPHA_LEVEL,
-        weightsForPace: (intervalMs) =>
-          intervalMs < thresholdMs ? fast : ALPHA_LEVEL.weights,
+        weightsForPace: (pace) =>
+          pace.intervalMs < thresholdMs ? fast : ALPHA_LEVEL.weights,
       },
     })
   }

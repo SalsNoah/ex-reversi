@@ -1,15 +1,19 @@
 /**
- * 「アルファ」= その時点で強さを裏取りできている構成に名前を付けたもの。
+ * 「アルファ」= 2026-09-15 23時に裏取りしてゲームへ載せた構成。
  *
  * `strategyCpu` は開発中の現行版で、調整のたびに中身が動く。
  * こちらは画面から選ぶ対戦相手として固定しておきたいので、
  * 設定値を `MASTER_LEVEL` から広げずに、この場に数値で書き出す。
- * 変えるときは、変えた理由と実測を docs/strategy-ai.md に残す。
  *
- * 2026-09-15 時点の裏取り（docs/strategy-ai.md）:
+ * この個体のあとに明確に勝ち越した版は、アルファを上書きせず
+ * ベータ以降として残す（仕様 2.9）。
+ *
+ * 2026-09-15 23時の裏取り（docs/strategy-ai.md）:
+ * - 着手可能数を変える前の構成に、同じ探索量・60戦で 49勝11敗
  * - GA 代表 5 体（第20/40/60/80/100世代）各24戦・計120戦で 111勝8敗1分（92.9%）
- * - 重みを変える前の構成に対して、同じ探索量・60戦で 49勝11敗
  * - 1 手の探索時間は平均 45ms / p95 99ms（50ms ステップ内で同期実行）
+ *
+ * 全滅の余裕（`wipeout`）は持たない。後から足した版はベータ。
  */
 import { GAME_CONFIG } from '../../game/config.ts'
 import type { CpuAgent } from '../types.ts'
@@ -45,6 +49,8 @@ export const ALPHA_WEIGHT_SPEC: WeightSpec = {
     ...DEFAULT_WEIGHT_SPEC.endgame,
     mobility: DEFAULT_WEIGHT_SPEC.endgame.mobility * MOBILITY_GAIN,
   },
+  // 23時時点の評価にこの項は無い。省略すると開発中の既定 1200 が乗るので明示する
+  wipeout: 0,
 }
 
 export const ALPHA_WEIGHTS = buildWeightTables(ALPHA_WEIGHT_SPEC)
@@ -60,8 +66,9 @@ export const ALPHA_LEVEL: StrategyLevel = {
   weights: ALPHA_WEIGHTS,
 }
 
-export const alphaCpu: CpuAgent = createStrategyCpu({
-  id: 'alpha',
-  label: 'アルファ',
-  level: ALPHA_LEVEL,
-})
+/** 相手ペースの推定を実体ごとに持つので、両側に置くときは別々に作る */
+export function createAlphaCpu(): CpuAgent {
+  return createStrategyCpu({ id: 'alpha', label: 'アルファ', level: ALPHA_LEVEL })
+}
+
+export const alphaCpu: CpuAgent = createAlphaCpu()

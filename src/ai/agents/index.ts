@@ -28,6 +28,11 @@ const BASE_SPECS: AgentSpec[] = [
     create: () => legacyCpuAgent('alpha'),
   },
   {
+    id: 'legacy_beta',
+    label: '既存 ベータAI',
+    create: () => legacyCpuAgent('beta'),
+  },
+  {
     // ゲームに載っている「アン」をそのまま測る（公開状態への変換も含めて確認する）
     // 相手を人間と想定しているので、CPU 同士の対戦では相手の判断待ちを読み違える
     id: 'legacy_ann',
