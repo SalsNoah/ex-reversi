@@ -33,6 +33,22 @@ const BASE_SPECS: AgentSpec[] = [
     create: () => legacyCpuAgent('beta'),
   },
   {
+    id: 'legacy_gamma',
+    label: '既存 ガンマAI',
+    create: () => legacyCpuAgent('gamma'),
+  },
+  {
+    id: 'legacy_delta',
+    label: '既存 デルタAI',
+    create: () => legacyCpuAgent('delta'),
+  },
+  {
+    // ゲームに載っている最新の名前付き個体。勝てたらそう言ってよい相手
+    id: 'legacy_epsilon',
+    label: '既存 イプシロンAI',
+    create: () => legacyCpuAgent('epsilon'),
+  },
+  {
     // ゲームに載っている「アン」をそのまま測る（公開状態への変換も含めて確認する）
     // 相手を人間と想定しているので、CPU 同士の対戦では相手の判断待ちを読み違える
     id: 'legacy_ann',

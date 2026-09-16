@@ -8,6 +8,13 @@ export {
 } from './strategyCpu.ts'
 export { ALPHA_LEVEL, alphaCpu, createAlphaCpu } from './alphaCpu.ts'
 export { BETA_LEVEL, betaCpu, createBetaCpu } from './betaCpu.ts'
+export { GAMMA_LEVEL, createGammaCpu, gammaCpu } from './gammaCpu.ts'
+export { DELTA_LEVEL, createDeltaCpu, deltaCpu } from './deltaCpu.ts'
+export {
+  EPSILON_LEVEL,
+  createEpsilonCpu,
+  epsilonCpu,
+} from './epsilonCpu.ts'
 export { evaluate, evaluateDetailed, terminalScore } from './evaluate.ts'
 export { countStable } from './stability.ts'
 export {

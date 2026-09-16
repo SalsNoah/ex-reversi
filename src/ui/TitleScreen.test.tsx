@@ -3,14 +3,18 @@ import { describe, expect, it } from 'vitest'
 import { TitleScreen } from './TitleScreen.tsx'
 
 describe('TitleScreen', () => {
-  it('ベータを先頭の選択肢として出せる', () => {
+  it('イプシロンを先頭の選択肢として出せる', () => {
     const html = renderToStaticMarkup(
-      <TitleScreen initialCpuType="beta" canStart onStart={() => {}} />,
+      <TitleScreen initialCpuType="epsilon" canStart onStart={() => {}} />,
     )
-    expect(html).toContain('ベータ')
-    expect(html).toContain('アルファ')
-    expect(html).toContain('value="beta"')
+    expect(html).toContain('value="epsilon"')
     expect(html).toContain('checked')
+    // 過去の名前付き個体は消さず、新しい順に並べる（仕様 2.9）
+    const order = ['epsilon', 'delta', 'gamma', 'beta', 'alpha'].map((id) =>
+      html.indexOf(`value="${id}"`),
+    )
+    expect(order.every((at) => at >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
   it('15世代から5世代ごとのGA育成を出せる', () => {

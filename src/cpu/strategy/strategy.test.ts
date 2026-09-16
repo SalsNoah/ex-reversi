@@ -56,6 +56,9 @@ import {
 } from './strategyCpu.ts'
 import { ALPHA_LEVEL, ALPHA_WEIGHT_SPEC, alphaCpu } from './alphaCpu.ts'
 import { BETA_LEVEL, BETA_WEIGHT_SPEC, betaCpu } from './betaCpu.ts'
+import { GAMMA_LEVEL } from './gammaCpu.ts'
+import { DELTA_LEVEL, DELTA_WEIGHT_SPEC } from './deltaCpu.ts'
+import { EPSILON_LEVEL, EPSILON_WEIGHT_SPEC } from './epsilonCpu.ts'
 import { DEFAULT_WEIGHT_SPEC } from './evaluate.ts'
 import { runPacedMatch } from './pacedMatch.ts'
 import { CPU_OPTIONS, getCpuAgent } from '../index.ts'
@@ -493,6 +496,49 @@ describe('戦略AI 評価', () => {
     expect(checked).toBeGreaterThan(300)
     // 「どれも危険でないので 0 枚で一致」では照合にならない。全滅する形も出す
     expect([...seenMargins].sort()).toEqual([0, 1, 2, 3])
+  })
+
+  it('相手が 2 手続けて打てば全部返る形を、1 手では返らなくても嫌う', () => {
+    // 白 4 枚。黒の 1 手ではどれも全部は返らないが、
+    // (4,2) → (4,6) と 2 手続ければ 4 枚とも返る
+    const board = createEmptyBoard()
+    for (let row = 2; row <= 7; row += 1) {
+      for (let col = 2; col <= 7; col += 1) board[row][col] = 'black'
+    }
+    board[4][2] = null
+    board[4][3] = 'white'
+    board[4][4] = 'white'
+    board[4][5] = 'white'
+    board[4][6] = null
+    board[5][5] = 'white'
+
+    const pos = createFastPosition()
+    loadBoard(pos, board)
+    expect(pos.white).toBe(4)
+    expect(countStable(pos).white).toBe(0)
+    // 1 手では全部返らない＝1 手先だけ見る項では区別できない
+    expect(scanLeaf(pos).maxWhiteFlips).toBeLessThan(pos.white)
+
+    const scoreWith = (tables: WeightTables): number => {
+      applyWeights(tables)
+      const score = evaluateLeaf(pos, WHITE, true)
+      applyWeights(DEFAULT_WEIGHTS)
+      return score
+    }
+    const without = buildWeightTables({
+      ...DEFAULT_WEIGHT_SPEC,
+      wipeout2: 0,
+    })
+
+    expect(scoreWith(without) - scoreWith(DEFAULT_WEIGHTS)).toBeGreaterThan(
+      5_000,
+    )
+
+    // 盤は読みの途中で置いて戻すので、評価しても元のままであること
+    const before = Array.from(pos.cells)
+    scoreWith(DEFAULT_WEIGHTS)
+    expect(Array.from(pos.cells)).toEqual(before)
+    expect(pos.white).toBe(4)
   })
 
   it('石が多い側は数えない（葉を重くしないため）', () => {
@@ -1144,13 +1190,52 @@ describe('アルファ', () => {
   })
 })
 
-describe('ベータ', () => {
-  it('開始画面の先頭に並び、既定の対戦相手になる', () => {
-    expect(CPU_OPTIONS[0]).toEqual({ id: 'beta', label: 'ベータ' })
-    expect(CPU_OPTIONS[1]).toEqual({ id: 'alpha', label: 'アルファ' })
-    expect(getCpuAgent('beta')).toBe(betaCpu)
-    expect(createTitleSession().settings.cpuType).toBe('beta')
+describe('名前付き個体', () => {
+  it('新しい順に並び、先頭が既定の対戦相手になる', () => {
+    // 過去の個体は消さず、新しいものから並べる（仕様 2.9）
+    const named = ['epsilon', 'delta', 'gamma', 'beta', 'alpha']
+    expect(CPU_OPTIONS.slice(0, named.length).map((o) => o.id)).toEqual(named)
+    expect(createTitleSession().settings.cpuType).toBe(named[0])
+    for (const id of named) {
+      expect(getCpuAgent(id as 'epsilon').id).toBe(id)
+    }
   })
+
+  it('過去の個体の設定を後から足した項で動かさない', () => {
+    // 省略すると開発版の既定が乗るので、名前付き個体は 0 を明示している
+    expect(ALPHA_WEIGHT_SPEC.wipeout).toBe(0)
+    expect(ALPHA_WEIGHT_SPEC.wipeout2).toBe(0)
+    expect(ALPHA_LEVEL.weights.wipeout).toBe(0)
+    expect(ALPHA_LEVEL.weights.wipeout2).toBe(0)
+    expect(BETA_WEIGHT_SPEC.wipeout2).toBe(0)
+    expect(BETA_LEVEL.weights.wipeout2).toBe(0)
+    expect(GAMMA_LEVEL.weights.wipeout2).toBe(0)
+  })
+
+  it('イプシロンは C 打ちと石数だけがデルタと違う', () => {
+    expect(EPSILON_LEVEL.nodeBudget).toBe(DELTA_LEVEL.nodeBudget)
+    expect(EPSILON_LEVEL.adaptPace).toBe(DELTA_LEVEL.adaptPace)
+    for (const phase of ['opening', 'midgame', 'endgame'] as const) {
+      const from = DELTA_WEIGHT_SPEC[phase]
+      const to = EPSILON_WEIGHT_SPEC[phase]
+      expect(to.cSquare).toBeCloseTo(from.cSquare * 2)
+      expect(to.disc).toBeCloseTo(from.disc * 0.5)
+      for (const term of [
+        'corner',
+        'stable',
+        'mobility',
+        'potential',
+        'xSquare',
+        'edge',
+        'parity',
+      ] as const) {
+        expect(to[term]).toBeCloseTo(from[term])
+      }
+    }
+  })
+})
+
+describe('ベータ', () => {
 
   it('アルファに足した全滅の余裕を固定する', () => {
     expect(BETA_LEVEL.nodeBudget).toBe(ALPHA_LEVEL.nodeBudget)

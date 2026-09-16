@@ -27,6 +27,8 @@ import { createStrategyCpu, type StrategyLevel } from './strategyCpu.ts'
 export const BETA_WEIGHT_SPEC: WeightSpec = {
   ...ALPHA_WEIGHT_SPEC,
   wipeout: 1_200,
+  // 相手の 2 手先を見る項はこの個体には無い。後から足した版はガンマ
+  wipeout2: 0,
 }
 
 export const BETA_WEIGHTS = buildWeightTables(BETA_WEIGHT_SPEC)

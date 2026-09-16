@@ -49,8 +49,9 @@ export const ALPHA_WEIGHT_SPEC: WeightSpec = {
     ...DEFAULT_WEIGHT_SPEC.endgame,
     mobility: DEFAULT_WEIGHT_SPEC.endgame.mobility * MOBILITY_GAIN,
   },
-  // 23時時点の評価にこの項は無い。省略すると開発中の既定 1200 が乗るので明示する
+  // 23時時点の評価にこれらの項は無い。省略すると開発中の既定が乗るので明示する
   wipeout: 0,
+  wipeout2: 0,
 }
 
 export const ALPHA_WEIGHTS = buildWeightTables(ALPHA_WEIGHT_SPEC)

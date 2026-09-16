@@ -15,11 +15,16 @@
  */
 import {
   BLACK,
+  CELL_COUNT,
   DIRS,
+  EMPTY,
   EMPTY_HEAD,
   N,
+  W,
   WHITE,
   cellIndex,
+  doMove,
+  undoMove,
   type FastPosition,
 } from './fastBoard.ts'
 import { countStable } from './stability.ts'
@@ -158,6 +163,21 @@ const WIPEOUT_WEIGHT = 1_200
  */
 const WIPEOUT_SCAN_MAX = 10
 
+/**
+ * 相手が 2 手続けて打って全滅させられる形への罰。
+ *
+ * 上の `wipeoutRisk` は相手の 1 手しか見ない。ところが最速の `max_flip` に
+ * 全滅で負けた 22 局を調べると、**22 局とも 1 手では全滅せず、2 手で全滅**しており、
+ * 1 手の項はそこを罰していなかった（`docs/strategy-ai.md`「2 手先の全滅」）。
+ * 相手が自分より 1.4〜1.7 倍打てるこのゲームでは、2 手続けて打たれるのが普通。
+ *
+ * 相手の 1 手目は「一番多く返す手」だけ試す。全部試すのが正解だが葉が 15 倍になる。
+ * 絞った版は正解を**取りこぼすことはあっても、安全な形を危険と言うことはない**
+ * （致命手の 68%・ふつうの手の 1.2% で成立。誤検出 0）。過剰に怖がって
+ * 強い相手への指し方を巻き添えにする事故は、この向きなら起きない。
+ */
+const WIPEOUT2_WEIGHT = 6_000
+
 const TABLE_SIZE = CELLS_TOTAL - START_DISCS + 1
 
 /**
@@ -180,6 +200,7 @@ export type WeightTables = {
   survival: number
   survivalFloor: number
   wipeout: number
+  wipeout2: number
 }
 
 export type WeightSpec = {
@@ -191,6 +212,8 @@ export type WeightSpec = {
   survivalFloor?: number
   /** 相手の 1 手で全部返る形への罰。省略時は既定 */
   wipeout?: number
+  /** 相手が 2 手続けて打つと全部返る形への罰。省略時は既定 */
+  wipeout2?: number
 }
 
 const wCorner = new Float64Array(TABLE_SIZE)
@@ -205,6 +228,7 @@ const wParity = new Float64Array(TABLE_SIZE)
 let wSurvival = 0
 let wSurvivalFloor = SURVIVAL_FLOOR
 let wWipeout = 0
+let wWipeout2 = 0
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
@@ -239,6 +263,7 @@ export function buildWeightTables(spec: WeightSpec): WeightTables {
     survival: spec.survival,
     survivalFloor: spec.survivalFloor ?? SURVIVAL_FLOOR,
     wipeout: spec.wipeout ?? WIPEOUT_WEIGHT,
+    wipeout2: spec.wipeout2 ?? WIPEOUT2_WEIGHT,
   }
 }
 
@@ -269,6 +294,7 @@ export function applyWeights(tables: WeightTables): void {
   wSurvival = tables.survival
   wSurvivalFloor = tables.survivalFloor
   wWipeout = tables.wipeout
+  wWipeout2 = tables.wipeout2
 }
 
 applyWeights(DEFAULT_WEIGHTS)
@@ -308,6 +334,9 @@ export type LeafScan = {
   maxBlackFlips: number
   /** 黒の 1 手で返される白石の最大枚数 */
   maxWhiteFlips: number
+  /** 上の最大を与えるマス。2 手先を見るときの 1 手目に使う。無いときは -1 */
+  maxBlackFlipSpot: number
+  maxWhiteFlipSpot: number
 }
 
 const scan: LeafScan = {
@@ -317,6 +346,8 @@ const scan: LeafScan = {
   whitePotential: 0,
   maxBlackFlips: 0,
   maxWhiteFlips: 0,
+  maxBlackFlipSpot: -1,
+  maxWhiteFlipSpot: -1,
 }
 
 /**
@@ -338,11 +369,14 @@ export function scanLeaf(pos: FastPosition): LeafScan {
   let blackPotential = 0
   let whitePotential = 0
 
-  const countBlackFlips = wWipeout !== 0 && pos.black <= WIPEOUT_SCAN_MAX
-  const countWhiteFlips = wWipeout !== 0 && pos.white <= WIPEOUT_SCAN_MAX
+  const wantFlips = wWipeout !== 0 || wWipeout2 !== 0
+  const countBlackFlips = wantFlips && pos.black <= WIPEOUT_SCAN_MAX
+  const countWhiteFlips = wantFlips && pos.white <= WIPEOUT_SCAN_MAX
   const canStopEarly = !countBlackFlips && !countWhiteFlips
   let maxBlackFlips = 0
   let maxWhiteFlips = 0
+  let maxBlackFlipSpot = -1
+  let maxWhiteFlipSpot = -1
 
   for (let i = next[EMPTY_HEAD]; i !== EMPTY_HEAD; i = next[i]) {
     // 石に接していないマスは、着手も開放度も生まない
@@ -417,8 +451,14 @@ export function scanLeaf(pos: FastPosition): LeafScan {
     }
     if (touchesWhite) blackPotential += 1
     if (touchesBlack) whitePotential += 1
-    if (blackFlips > maxBlackFlips) maxBlackFlips = blackFlips
-    if (whiteFlips > maxWhiteFlips) maxWhiteFlips = whiteFlips
+    if (blackFlips > maxBlackFlips) {
+      maxBlackFlips = blackFlips
+      maxBlackFlipSpot = i
+    }
+    if (whiteFlips > maxWhiteFlips) {
+      maxWhiteFlips = whiteFlips
+      maxWhiteFlipSpot = i
+    }
   }
 
   scan.blackMobility = blackMobility
@@ -427,6 +467,8 @@ export function scanLeaf(pos: FastPosition): LeafScan {
   scan.whitePotential = whitePotential
   scan.maxBlackFlips = maxBlackFlips
   scan.maxWhiteFlips = maxWhiteFlips
+  scan.maxBlackFlipSpot = maxBlackFlipSpot
+  scan.maxWhiteFlipSpot = maxWhiteFlipSpot
   return scan
 }
 
@@ -455,6 +497,68 @@ function wipeoutRisk(
   if (margin >= WIPEOUT_MARGIN) return 0
   const gap = WIPEOUT_MARGIN - margin
   return gap * gap
+}
+
+/**
+ * `victim` の石を 1 手で全部返せるマスがあるか。
+ * 全部返す手は victim のどの石も返すので、石を 1 つ選んで連なりを逆に辿った先の
+ * 空きマス（高々 8 マス）だけ試せば足りる。
+ */
+function canWipeNow(pos: FastPosition, victim: number, discs: number): boolean {
+  const cells = pos.cells
+  const attacker = victim ^ 3
+  let seed = -1
+  for (let i = W + 1; i < CELL_COUNT - W; i += 1) {
+    if (cells[i] === victim) {
+      seed = i
+      break
+    }
+  }
+  if (seed < 0) return false
+
+  for (let d = 0; d < 8; d += 1) {
+    let spot = seed
+    do {
+      spot += DIRS[d]
+    } while (cells[spot] === victim)
+    if (cells[spot] !== EMPTY) continue
+
+    let total = 0
+    for (let e = 0; e < 8; e += 1) {
+      const dir = DIRS[e]
+      let j = spot + dir
+      let run = 0
+      while (cells[j] === victim) {
+        run += 1
+        j += dir
+      }
+      if (run !== 0 && cells[j] === attacker) total += run
+    }
+    if (total >= discs) return true
+  }
+  return false
+}
+
+/**
+ * 相手が 2 手続けて打って `victim` を 0 枚にできるか。
+ * 1 手目は `spot`（一番多く返すマス）だけ見る。取りこぼす代わりに、
+ * 安全な形を危険と言うことはない（詳しくは `WIPEOUT2_WEIGHT`）。
+ */
+function wipeoutRisk2(
+  pos: FastPosition,
+  victim: number,
+  discs: number,
+  stable: number,
+  spot: number,
+): number {
+  if (wWipeout2 === 0 || stable > 0 || discs > WIPEOUT_SCAN_MAX) return 0
+  if (spot < 0) return 0
+  const attacker = victim ^ 3
+  const flipped = doMove(pos, spot, attacker)
+  const left = victim === BLACK ? pos.black : pos.white
+  const doomed = left !== 0 && canWipeNow(pos, victim, left)
+  undoMove(pos, spot, attacker, flipped)
+  return doomed ? 1 : 0
 }
 
 /** 終局した盤面の点数。勝敗を最優先し、石差で細かく順位を付ける */
@@ -560,6 +664,11 @@ function evaluateFromScan(
     wipeoutRisk(oppDiscs, oppStable, oppFlips) -
     wipeoutRisk(myDiscs, myStable, myFlips)
 
+  // 守りだけ。「相手を 2 手で全滅させられる」は、2 手続けて打てる側でないと
+  // 実現しないので点数にしない（遅い側がこれを追うと自分の形を崩す）
+  const mySpot = black ? leaf.maxBlackFlipSpot : leaf.maxWhiteFlipSpot
+  const wipeout2Term = -wipeoutRisk2(pos, me, myDiscs, myStable, mySpot)
+
   // 空きが奇数で自分の手番なら最後の 1 手を取りやすい
   const parity = ((pos.emptyCount & 1) === 1) === selfTurn ? 1 : -1
 
@@ -574,7 +683,8 @@ function evaluateFromScan(
     wDisc[slot] * discDiff +
     wParity[slot] * parity +
     wSurvival * survivalTerm +
-    wWipeout * wipeoutTerm
+    wWipeout * wipeoutTerm +
+    wWipeout2 * wipeout2Term
 
   return Math.round(score)
 }

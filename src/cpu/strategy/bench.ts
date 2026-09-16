@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 戦略AIの検証用 CLI（画面なし）。
  *
  *   tsx src/cpu/strategy/bench.ts verify      … ルール層との一致確認
@@ -25,6 +25,7 @@ import { matchSeeds, runGaMatch, type OpponentSpec } from '../../ga/matchRunner.
 import type { PaceEstimate } from './pace.ts'
 import {
   BLACK,
+  DIRS,
   EMPTY_HEAD,
   WHITE,
   colOf,
@@ -35,6 +36,7 @@ import {
   loadBoard,
   rowOf,
   undoMove,
+  type FastPosition,
 } from './fastBoard.ts'
 import {
   MASTER_LEVEL,
@@ -43,7 +45,22 @@ import {
   type StrategyLevel,
 } from './strategyCpu.ts'
 import { ALPHA_LEVEL, ALPHA_WEIGHT_SPEC, createAlphaCpu } from './alphaCpu.ts'
-import { BETA_LEVEL, createBetaCpu } from './betaCpu.ts'
+import { BETA_LEVEL, BETA_WEIGHT_SPEC, createBetaCpu } from './betaCpu.ts'
+import {
+  GAMMA_LEVEL,
+  GAMMA_WEIGHT_SPEC,
+  createGammaCpu,
+} from './gammaCpu.ts'
+import {
+  DELTA_LEVEL,
+  DELTA_WEIGHT_SPEC,
+  createDeltaCpu,
+} from './deltaCpu.ts'
+import {
+  EPSILON_LEVEL,
+  EPSILON_WEIGHT_SPEC,
+  createEpsilonCpu,
+} from './epsilonCpu.ts'
 import { runPacedMatch } from './pacedMatch.ts'
 import {
   DEFAULT_WEIGHTS,
@@ -147,18 +164,20 @@ function verify(): void {
 
 function speed(args: string[]): void {
   const argv = [...args]
-  // 全滅の余裕を見る項の重み。0 で切って所要を比べられるようにしてある
+  // 全滅の項の重み。0 で切って所要を比べられるようにしてある
   const wipeout = takeArg(argv, '--wipeout')
+  const wipeout2 = takeArg(argv, '--wipeout2')
   const budget = Number(argv[0] ?? MASTER_LEVEL.nodeBudget)
   const level = {
     ...MASTER_LEVEL,
     nodeBudget: budget,
     weights:
-      wipeout === undefined
+      wipeout === undefined && wipeout2 === undefined
         ? MASTER_LEVEL.weights
         : buildWeightTables({
             ...DEFAULT_WEIGHT_SPEC,
-            wipeout: Number(wipeout),
+            ...(wipeout === undefined ? {} : { wipeout: Number(wipeout) }),
+            ...(wipeout2 === undefined ? {} : { wipeout2: Number(wipeout2) }),
           }),
   }
   const samples: Array<{
@@ -287,6 +306,8 @@ type MatchPairingReport = {
 function match(args: string[]): void {
   const argv = [...args]
   const outPath = takeArg(argv, '--out')
+  // 任意の個体を GA 代表に当てる。指定すると下のつまみより優先する
+  const cpuId = takeArg(argv, '--cpu')
   // 相手の着手間隔の想定を変えて測るためのつまみ（既定は MASTER_LEVEL のまま）
   const oppInterval = takeArg(argv, '--opp-interval')
   const oppReaction = takeArg(argv, '--opp-reaction')
@@ -294,20 +315,23 @@ function match(args: string[]): void {
   const floor = takeArg(argv, '--survival-floor')
   const survival = takeArg(argv, '--survival')
   const wipeout = takeArg(argv, '--wipeout')
+  const wipeout2 = takeArg(argv, '--wipeout2')
+  const anyWeight = floor || survival || wipeout || wipeout2
   // 指定したときは実測追従を切り、その想定だけで読ませる
   const levelOverride =
-    oppInterval || oppReaction || floor || survival || wipeout
+    oppInterval || oppReaction || anyWeight
       ? {
           ...(oppInterval || oppReaction ? { adaptPace: false } : {}),
           ...(oppInterval ? { opponentIntervalMs: Number(oppInterval) } : {}),
           ...(oppReaction ? { opponentReactionMs: Number(oppReaction) } : {}),
-          ...(floor || survival || wipeout
+          ...(anyWeight
             ? {
                 weights: buildWeightTables({
-                  ...ALPHA_WEIGHT_SPEC,
+                  ...BETA_WEIGHT_SPEC,
                   ...(floor ? { survivalFloor: Number(floor) } : {}),
                   ...(survival ? { survival: Number(survival) } : {}),
                   ...(wipeout ? { wipeout: Number(wipeout) } : {}),
+                  ...(wipeout2 ? { wipeout2: Number(wipeout2) } : {}),
                 }),
               }
             : {}),
@@ -351,11 +375,14 @@ function match(args: string[]): void {
         genes: [...milestone.genes],
         labelId: milestone.id,
       }
+      const ourSpec = cpuId
+        ? agentSpec(cpuId, freshAgent(cpuId))
+        : strategySpec(levelOverride)
       const result = runGaMatch({
         matchId: `bench-${milestone.id}-g${g}`,
         seed: gameSeed,
-        black: strategyIsBlack ? strategySpec(levelOverride) : geneSpec,
-        white: strategyIsBlack ? geneSpec : strategySpec(levelOverride),
+        black: strategyIsBlack ? ourSpec : geneSpec,
+        white: strategyIsBlack ? geneSpec : ourSpec,
         decisionSeed,
       })
       if (result.abnormal) {
@@ -498,6 +525,61 @@ function agentSpec(
 
 type DuelResult = { win: number; loss: number; draw: number; diff: number }
 
+/**
+ * 本番と同じ実時間の進行で 2 体を黒白交互に当てる。
+ *
+ * 下の `duel`（交互手番）とは**結果が食い違うことがある**。潜在着手 0.5 倍は
+ * 交互手番でデルタに 60勝0敗だったのに、こちらでは 2勝55敗だった。
+ * 本番は実時間なので、採否はこちらで決める（`docs/strategy-ai.md`）。
+ */
+function pacedDuel(
+  agentA: CpuAgent,
+  agentB: CpuAgent,
+  idA: string,
+  idB: string,
+  games: number,
+  seed: number,
+  delay: number,
+): DuelResult & { wipedA: number; wipedB: number } {
+  let win = 0
+  let loss = 0
+  let draw = 0
+  let diffSum = 0
+  let wipedA = 0
+  let wipedB = 0
+
+  for (let g = 0; g < games; g += 1) {
+    const aIsBlack = g % 2 === 0
+    const { gameSeed, decisionSeed } = matchSeeds(
+      seed,
+      delay,
+      idA,
+      idB,
+      aIsBlack ? 'black' : 'white',
+      g,
+    )
+    const result = runPacedMatch({
+      seed: gameSeed,
+      decisionSeed,
+      black: aIsBlack ? agentA : agentB,
+      white: aIsBlack ? agentB : agentA,
+      blackThinkDelayMs: delay,
+      whiteThinkDelayMs: delay,
+    })
+    if (result.abnormal) throw new Error(`abnormal match #${g}`)
+    const diff = aIsBlack ? -result.diffForWhite : result.diffForWhite
+    diffSum += diff
+    if (diff > 0) win += 1
+    else if (diff < 0) loss += 1
+    else draw += 1
+    const stonesA = aIsBlack ? result.stones.black : result.stones.white
+    const stonesB = aIsBlack ? result.stones.white : result.stones.black
+    if (stonesA === 0) wipedA += 1
+    if (stonesB === 0) wipedB += 1
+  }
+  return { win, loss, draw, diff: diffSum / games, wipedA, wipedB }
+}
+
 /** 同じ探索設定どうしを黒白交互で当てて、勝敗と平均石差を返す */
 function duel(
   nameA: string,
@@ -548,6 +630,18 @@ const BASE_SURVIVAL_PENALTY =
 
 type TunableTerm = keyof PhaseWeights | 'survival'
 
+/** 名前付き個体。掃引の基準や `mix-` の土台に使う */
+const NAMED_SPECS: Record<
+  string,
+  { spec: WeightSpec; level: StrategyLevel }
+> = {
+  alpha: { spec: ALPHA_WEIGHT_SPEC, level: ALPHA_LEVEL },
+  beta: { spec: BETA_WEIGHT_SPEC, level: BETA_LEVEL },
+  gamma: { spec: GAMMA_WEIGHT_SPEC, level: GAMMA_LEVEL },
+  delta: { spec: DELTA_WEIGHT_SPEC, level: DELTA_LEVEL },
+  epsilon: { spec: EPSILON_WEIGHT_SPEC, level: EPSILON_LEVEL },
+}
+
 const TUNABLE_TERMS: TunableTerm[] = [
   'corner',
   'stable',
@@ -576,50 +670,72 @@ function scaleTerm(
 }
 
 /**
- * 評価の重みを 1 項ずつ増減して、既定と当てる。
+ * 評価の重みを 1 項ずつ増減して、基準と当てる。
  *
  * 探索は飽和していて読みを増やしても勝率が動かないので、
  * 強くするなら評価側を直すしかない。まずどの項がずれているかを見る。
- * 探索量を下げても強さがほぼ変わらないことを確かめたうえで、
- * 試合数を稼ぐために軽い設定で回す。
+ *
+ * **採否は `--paced` で決めること。** 既定の交互手番は速いが、
+ * 本番の実時間とは結果が食い違う（潜在着手 0.5 倍が 60勝0敗 → 2勝55敗）。
+ * 同じく**ノード数も本番の 14000 で測る**。3500 では 3 項が逆に出た。
  */
 function tune(args: string[]): void {
   const argv = [...args]
   const nodes = Number(takeArg(argv, '--nodes') ?? 3_500)
   const seed = Number(takeArg(argv, '--seed') ?? 555_001)
   const only = takeArg(argv, '--term')
-  const games = Number(argv[0] ?? 60)
+  const baseId = takeArg(argv, '--base') ?? 'default'
+  const paced = argv.includes('--paced')
+  const delay = GAME_CONFIG.cpuThinkDelayMs
+  const games = Number(argv.filter((a) => a !== '--paced')[0] ?? 60)
   const factors = (takeArg(argv, '--factors') ?? '0.5,2')
     .split(',')
     .map(Number)
 
-  const base: StrategyLevel = {
-    ...MASTER_LEVEL,
-    nodeBudget: nodes,
-    ponderStepNodes: 0,
-    adaptPace: false,
-  }
+  // 掃引の基準。いまの最強の上で測りたいときは --base delta
+  //
+  // 名前付き個体を指定したときは、**その個体の探索設定をそのまま使う**。
+  // 以前は重みだけ借りて `MASTER_LEVEL`（相手ペース追従オフ）で回しており、
+  // 本番と別物を測っていた（潜在着手 0.5 倍が 60勝0敗 → 実際は 2勝55敗）。
+  const picked = NAMED_SPECS[baseId]
+  const baseSpec = picked?.spec ?? DEFAULT_WEIGHT_SPEC
+  const base: StrategyLevel = picked
+    ? { ...picked.level, nodeBudget: nodes }
+    : {
+        ...MASTER_LEVEL,
+        nodeBudget: nodes,
+        ponderStepNodes: 0,
+        adaptPace: false,
+        weights: DEFAULT_WEIGHTS,
+      }
   const terms = only
     ? TUNABLE_TERMS.filter((t) => t === only)
     : TUNABLE_TERMS
 
-  console.log(`重み 1 項ずつ ${games}戦・黒白交互・探索 ${nodes} ノード`)
+  console.log(
+    `重み 1 項ずつ ${games}戦・黒白交互・探索 ${nodes} ノード・基準 ${baseId}` +
+      `・${paced ? '実時間（本番と同じ）' : '交互手番'}`,
+  )
   console.log('項目        倍率  勝-負-分     平均石差')
   for (const term of terms) {
     for (const factor of factors) {
-      const spec = scaleTerm(DEFAULT_WEIGHT_SPEC, term, factor)
+      const spec = scaleTerm(baseSpec, term, factor)
       const candidate: StrategyLevel = {
         ...base,
         weights: buildWeightTables(spec),
       }
-      const r = duel(
-        `${term}x${factor}`,
-        candidate,
-        'default',
-        base,
-        games,
-        seed,
-      )
+      const name = `${term}x${factor}`
+      const r = paced
+        ? pacedDuel(
+            levelAgent(name, candidate),
+            levelAgent(baseId, base),
+            name,
+            baseId,
+            games,
+            seed,
+            delay,
+          )
+        : duel(name, candidate, baseId, base, games, seed)
       console.log(
         `${term.padEnd(11)} x${String(factor).padEnd(4)} ` +
           `${`${r.win}-${r.loss}-${r.draw}`.padEnd(12)} ` +
@@ -903,6 +1019,9 @@ function ponderBench(args: string[]): void {
  */
 function freshAgent(id: string): CpuAgent {
   if (id === 'beta') return createBetaCpu()
+  if (id === 'gamma') return createGammaCpu()
+  if (id === 'delta') return createDeltaCpu()
+  if (id === 'epsilon') return createEpsilonCpu()
   if (id === 'alpha') return createAlphaCpu()
   if (id === 'strategy') {
     return createStrategyCpu({ id: 'strategy', label: '戦略AI', level: MASTER_LEVEL })
@@ -964,6 +1083,18 @@ function freshAgent(id: string): CpuAgent {
       level: {
         ...ALPHA_LEVEL,
         weights: buildWeightTables({ ...ALPHA_WEIGHT_SPEC, wipeout: weight }),
+      },
+    })
+  }
+  // ベータに「相手の 2 手で全滅」を足した版。betawipe2-<重み>。0 ならベータそのもの
+  if (id.startsWith('betawipe2-')) {
+    const weight = Number(id.split('-')[1])
+    return createStrategyCpu({
+      id: 'beta',
+      label: weight === 0 ? 'ベータ' : `ベータ+2手先の全滅×${weight}`,
+      level: {
+        ...BETA_LEVEL,
+        weights: buildWeightTables({ ...BETA_WEIGHT_SPEC, wipeout2: weight }),
       },
     })
   }
@@ -1029,6 +1160,69 @@ function freshAgent(id: string): CpuAgent {
       },
     })
   }
+  // ベータから 1 項だけ動かした版。betaterm-<項>-<倍率>
+  if (id.startsWith('betaterm-')) {
+    const [, term, factor] = id.split('-')
+    return createStrategyCpu({
+      id: 'beta',
+      label: `ベータ(${term}×${factor})`,
+      level: {
+        ...BETA_LEVEL,
+        weights: buildWeightTables(
+          scaleTerm(BETA_WEIGHT_SPEC, term as TunableTerm, Number(factor)),
+        ),
+      },
+    })
+  }
+  // ガンマから 1 項だけ動かした版。gammaterm-<項>-<倍率>
+  if (id.startsWith('gammaterm-')) {
+    const [, term, factor] = id.split('-')
+    return createStrategyCpu({
+      id: 'gamma',
+      label: `ガンマ(${term}×${factor})`,
+      level: {
+        ...GAMMA_LEVEL,
+        weights: buildWeightTables(
+          scaleTerm(GAMMA_WEIGHT_SPEC, term as TunableTerm, Number(factor)),
+        ),
+      },
+    })
+  }
+  // 複数項をまとめて動かした版。mix-<基準>-<項>:<倍率>,<項>:<倍率>,…
+  // 例: mix-gamma-mobility:2,disc:0.5
+  if (id.startsWith('mix-')) {
+    const [, baseId, list] = id.split('-')
+    const picked = NAMED_SPECS[baseId]
+    if (!picked) throw new Error(`unknown mix base: ${baseId}`)
+    let spec = picked.spec
+    for (const part of list.split(',')) {
+      // `項:倍率` は掛け算、`項=値` は絶対値（全滅の余裕など倍率に意味がない項）
+      if (part.includes('=')) {
+        const [key, value] = part.split('=')
+        spec = { ...spec, [key]: Number(value) }
+        continue
+      }
+      const [term, factor] = part.split(':')
+      spec = scaleTerm(spec, term as TunableTerm, Number(factor))
+    }
+    return createStrategyCpu({
+      id: baseId,
+      label: `${baseId}(${list})`,
+      level: { ...picked.level, weights: buildWeightTables(spec) },
+    })
+  }
+  // ガンマに 2 手先の全滅を足した版。gammawipe2-<重み>
+  if (id.startsWith('gammawipe2-')) {
+    const weight = Number(id.split('-')[1])
+    return createStrategyCpu({
+      id: 'gamma',
+      label: weight === 0 ? 'ガンマ' : `ガンマ+2手先の全滅×${weight}`,
+      level: {
+        ...GAMMA_LEVEL,
+        weights: buildWeightTables({ ...GAMMA_WEIGHT_SPEC, wipeout2: weight }),
+      },
+    })
+  }
   // アルファから 1 点だけ戻した比較用。どの変更が効いているかの切り分けに使う
   if (id.startsWith('alpha-')) {
     const [, term, factor] = id.split('-')
@@ -1062,50 +1256,190 @@ function versus(args: string[]): void {
 
   const agentA = freshAgent(idA)
   const agentB = freshAgent(idB)
-  let win = 0
-  let loss = 0
-  let draw = 0
-  let diffSum = 0
-  let wipedA = 0
-  let wipedB = 0
-
-  for (let g = 0; g < games; g += 1) {
-    const aIsBlack = g % 2 === 0
-    const { gameSeed, decisionSeed } = matchSeeds(
-      seed,
-      delay,
-      idA,
-      idB,
-      aIsBlack ? 'black' : 'white',
-      g,
-    )
-    const result = runPacedMatch({
-      seed: gameSeed,
-      decisionSeed,
-      black: aIsBlack ? agentA : agentB,
-      white: aIsBlack ? agentB : agentA,
-      blackThinkDelayMs: delay,
-      whiteThinkDelayMs: delay,
-    })
-    if (result.abnormal) throw new Error(`abnormal match #${g}`)
-    const diff = aIsBlack ? -result.diffForWhite : result.diffForWhite
-    diffSum += diff
-    if (diff > 0) win += 1
-    else if (diff < 0) loss += 1
-    else draw += 1
-    const stonesA = aIsBlack ? result.stones.black : result.stones.white
-    const stonesB = aIsBlack ? result.stones.white : result.stones.black
-    if (stonesA === 0) wipedA += 1
-    if (stonesB === 0) wipedB += 1
-  }
+  const r = pacedDuel(agentA, agentB, idA, idB, games, seed, delay)
 
   console.log(
     `${agentA.label} vs ${agentB.label} / ${games}戦・黒白交互 / ` +
       `双方の判断待ち ${delay}ms / seed ${seed}`,
   )
   console.log(
-    `${win}勝 ${loss}敗 ${draw}分（${((win / games) * 100).toFixed(1)}%） ` +
-      `平均石差 ${(diffSum / games).toFixed(1)} / 全滅 ${wipedA}:${wipedB}`,
+    `${r.win}勝 ${r.loss}敗 ${r.draw}分（${((r.win / games) * 100).toFixed(1)}%） ` +
+      `平均石差 ${r.diff.toFixed(1)} / 全滅 ${r.wipedA}:${r.wipedB}`,
+  )
+}
+
+/** 黒の 1 手で返せる白石の最大枚数。空きマスを全部試す（遅いが `scanLeaf` の重みに依存しない） */
+function maxWhiteFlips(pos: FastPosition): number {
+  const { cells, emptyNext } = pos
+  let best = 0
+  for (let i = emptyNext[EMPTY_HEAD]; i !== EMPTY_HEAD; i = emptyNext[i]) {
+    let total = 0
+    for (let d = 0; d < 8; d += 1) {
+      const dir = DIRS[d]
+      let j = i + dir
+      let run = 0
+      while (cells[j] === WHITE) {
+        run += 1
+        j += dir
+      }
+      if (run !== 0 && cells[j] === BLACK) total += run
+    }
+    if (total > best) best = total
+  }
+  return best
+}
+
+/** 黒が何手続けて打てば白を 0 枚にできるか。届かなければ `Infinity` */
+function movesToWipeWhite(pos: FastPosition, limit: number): number {
+  if (pos.white === 0) return 0
+  if (maxWhiteFlips(pos) >= pos.white) return 1
+  if (limit <= 1) return Infinity
+  const buf = new Int32Array(128)
+  const count = generateMoves(pos, BLACK, buf, 0)
+  let best = Infinity
+  for (let k = 0; k < count; k += 1) {
+    const move = buf[k]
+    const flips = doMove(pos, move, BLACK)
+    const found = movesToWipeWhite(pos, limit - 1)
+    undoMove(pos, move, BLACK, flips)
+    if (found + 1 < best) best = found + 1
+  }
+  return best
+}
+
+/**
+ * 全滅で負けた試合を再現し、負けが何手先まで見えていれば防げたかを測る。
+ *
+ * `docs/strategy-ai.md`「2 手先の全滅」の数字はこれで出している。
+ * 自分の着手の直後の盤面を集め、負けを決めた 1 手（致命手）と
+ * 同じ試合のふつうの手を並べて、どの条件なら前者だけを拾えるかを見る。
+ */
+function wipeoutDiag(args: string[]): void {
+  const argv = [...args]
+  const whiteId = takeArg(argv, '--white') ?? 'strategy'
+  const delay = Number(takeArg(argv, '--delay') ?? 0)
+  const seed = Number(takeArg(argv, '--seed') ?? 20260915)
+  const depth = Number(takeArg(argv, '--depth') ?? 3)
+  const games = Number(argv[0] ?? 60)
+
+  const black = freshAgent('max_flip')
+  const white = freshAgent(whiteId)
+  const pos = createFastPosition()
+  const buf = new Int32Array(128)
+
+  // 何手先まで読めば全滅と分かるか。致命手とふつうの手で別々に数える
+  const fatalAt = new Map<number, number>()
+  const plainAt = new Map<number, number>()
+  const bump = (into: Map<number, number>, n: number): void => {
+    into.set(n, (into.get(n) ?? 0) + 1)
+  }
+  let wiped = 0
+  let fatal = 0
+  let plain = 0
+  // 致命手の何手前まで遡れば、全滅に届かない手があったか
+  const escapeAt: number[] = []
+
+  for (let g = 0; g < games; g += 1) {
+    const { gameSeed, decisionSeed } = matchSeeds(
+      seed,
+      delay,
+      whiteId,
+      'max_flip',
+      'white',
+      g,
+    )
+    const boards: Array<{ board: Board; whiteMoved: boolean }> = []
+    const result = runPacedMatch({
+      seed: gameSeed,
+      decisionSeed,
+      black,
+      white,
+      blackThinkDelayMs: delay,
+      observe: (step) => {
+        boards.push({
+          board: step.board.map((row) => [...row]),
+          whiteMoved: step.white !== undefined,
+        })
+      },
+    })
+    // 誤爆率は勝った試合も含めて数える。負けた試合だけ見ると分母が偏る
+    const lost = result.stones.white === 0
+    if (lost) wiped += 1
+
+    // 白が打ったステップの「打つ前」と「打ったあと」
+    const own: Array<{ before: Board; after: Board }> = []
+    for (let i = 0; i < boards.length; i += 1) {
+      if (!boards[i].whiteMoved || !boards[i + 1]) continue
+      own.push({ before: boards[i].board, after: boards[i + 1].board })
+    }
+    if (own.length === 0) continue
+
+    for (let k = 0; k < own.length; k += 1) {
+      loadBoard(pos, own[k].after)
+      if (pos.white === 0) continue
+      // 確定石が 1 つでもあれば全滅はありえない
+      if (countStable(pos).white > 0) continue
+      loadBoard(pos, own[k].after) // countStable は盤を書き換える
+      const need = movesToWipeWhite(pos, depth)
+      if (lost && k === own.length - 1) {
+        fatal += 1
+        bump(fatalAt, need)
+      } else {
+        plain += 1
+        bump(plainAt, need)
+      }
+    }
+
+    if (!lost) continue
+    // 致命手から遡り、「全滅に届かない手」があった最後の地点を探す
+    let back = -1
+    for (let k = own.length - 1; k >= 0 && back < 0; k -= 1) {
+      loadBoard(pos, own[k].before)
+      const count = generateMoves(pos, WHITE, buf, 0)
+      for (let m = 0; m < count && back < 0; m += 1) {
+        const flips = doMove(pos, buf[m], WHITE)
+        if (movesToWipeWhite(pos, depth) > depth) back = own.length - 1 - k
+        undoMove(pos, buf[m], WHITE, flips)
+      }
+    }
+    escapeAt.push(back)
+  }
+
+  const pct = (n: number, total: number): string =>
+    total === 0 ? '   -  ' : `${((n / total) * 100).toFixed(1).padStart(5)}%`
+
+  console.log(
+    `白 ${white.label} vs 黒 ${black.label}（判断待ち ${delay}ms）/ ${games}戦 / seed ${seed}`,
+  )
+  console.log(`全滅で負けた試合: ${wiped}/${games}`)
+  console.log(`致命手 ${fatal} 局面 / ふつうの自着手 ${plain} 局面（確定石 0 のみ）`)
+  console.log('')
+  console.log('黒が全滅させるのに要る手数  致命手            ふつうの手')
+  for (let n = 1; n <= depth; n += 1) {
+    const f = fatalAt.get(n) ?? 0
+    const p = plainAt.get(n) ?? 0
+    console.log(
+      `${String(n).padStart(20)} 手  ` +
+        `${String(f).padStart(4)}/${String(fatal).padEnd(5)} ${pct(f, fatal)}  ` +
+        `${String(p).padStart(4)}/${String(plain).padEnd(5)} ${pct(p, plain)}`,
+    )
+  }
+  const fOut = fatalAt.get(Infinity) ?? 0
+  const pOut = plainAt.get(Infinity) ?? 0
+  console.log(
+    `${String(depth).padStart(18)} 手超  ` +
+      `${String(fOut).padStart(4)}/${String(fatal).padEnd(5)} ${pct(fOut, fatal)}  ` +
+      `${String(pOut).padStart(4)}/${String(plain).padEnd(5)} ${pct(pOut, plain)}`,
+  )
+  console.log('')
+  const trail = new Map<number, number>()
+  for (const n of escapeAt) trail.set(n, (trail.get(n) ?? 0) + 1)
+  console.log(
+    '逃げ道があった最後の地点: ' +
+      [...trail]
+        .sort((a, b) => a[0] - b[0])
+        .map(([n, c]) => (n < 0 ? `なし:${c}` : `${n}手前:${c}`))
+        .join('  '),
   )
 }
 
@@ -1242,14 +1576,17 @@ else if (command === 'ponder') ponderBench(rest)
 else if (command === 'ponder-speed') ponderSpeed(rest)
 else if (command === 'tune') tune(rest)
 else if (command === 'pace') paceSweep(rest)
+else if (command === 'wipeout') wipeoutDiag(rest)
 else if (command === 'versus') versus(rest)
 else {
   console.error(
-    'usage: bench.ts <verify|speed|match [N] [id] [--out PATH]|' +
+    'usage: bench.ts <verify|speed|match [N] [id] [--cpu ID] [--out PATH]|' +
       'human [N] [blackId]|ladder|agree|profile|' +
       'ponder [N] [stepNodes]|ponder-speed [stepNodes]|' +
-      'tune [N] [--nodes X] [--term NAME]|' +
+      'tune [N] [--nodes X] [--term NAME] [--base alpha|beta|gamma|delta] ' +
+      '[--factors a,b] [--paced]|' +
       'pace [N] [blackId] [--white ID] [--delays a,b,c] [--seed S]|' +
+      'wipeout [N] [--white ID] [--delay MS] [--depth D] [--seed S]|' +
       'versus [N] [idA] [idB] [--delay MS] [--seed S]>',
   )
   process.exit(1)
