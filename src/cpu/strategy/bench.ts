@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 戦略AIの検証用 CLI（画面なし）。
  *
  *   tsx src/cpu/strategy/bench.ts verify      … ルール層との一致確認
@@ -21,6 +21,7 @@ import { GAME_CONFIG } from '../../game/config.ts'
 import type { Board, Stone } from '../../game/types.ts'
 import { GA_MILESTONES } from '../gaMilestones.ts'
 import { getCpuAgent } from '../index.ts'
+import type { CpuTypeId } from '../types.ts'
 import { matchSeeds, runGaMatch, type OpponentSpec } from '../../ga/matchRunner.ts'
 import type { PaceEstimate } from './pace.ts'
 import {
@@ -1206,7 +1207,7 @@ function freshAgent(id: string): CpuAgent {
       spec = scaleTerm(spec, term as TunableTerm, Number(factor))
     }
     return createStrategyCpu({
-      id: baseId,
+      id: baseId as CpuTypeId,
       label: `${baseId}(${list})`,
       level: { ...picked.level, weights: buildWeightTables(spec) },
     })
